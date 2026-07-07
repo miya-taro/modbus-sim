@@ -1,0 +1,80 @@
+"""Configuration models for Modbus simulator."""
+
+from dataclasses import dataclass
+from enum import Enum
+
+from modbus_sim.network import normalize_host
+
+
+class CommMode(str, Enum):
+    TCP = "tcp"
+    RTU = "rtu"
+
+
+class Parity(str, Enum):
+    NONE = "None"
+    EVEN = "Even"
+    ODD = "Odd"
+
+    def to_pyserial(self) -> str:
+        return {"None": "N", "Even": "E", "Odd": "O"}[self.value]
+
+
+class RegisterKind(str, Enum):
+    COIL = "coil"
+    DISCRETE_INPUT = "di"
+    HOLDING_REGISTER = "hr"
+    INPUT_REGISTER = "ir"
+
+
+class ValueKind(str, Enum):
+    UINT16 = "uint16"
+    INT16 = "int16"
+    INT32 = "int32"
+    BOOL = "bool"
+
+
+BAUD_RATES = (9600, 19200, 38400, 115200)
+DATA_BITS = (7, 8)
+STOP_BITS = (1, 2)
+REGISTER_COUNT = 65536
+ACTIVITY_TIMEOUT_SEC = 3.0
+PAGE_SIZE = 20
+
+
+@dataclass
+class TcpConfig:
+    host: str = "127.0.0.1"
+    port: int = 5020
+
+    def __post_init__(self) -> None:
+        self.host = normalize_host(self.host)
+
+    def summary(self) -> str:
+        if ":" in self.host and "." not in self.host:
+            return f"TCP [{self.host}]:{self.port}"
+        return f"TCP {self.host}:{self.port}"
+
+
+@dataclass
+class RtuConfig:
+    port: str = "COM1"
+    baudrate: int = 9600
+    parity: Parity = Parity.EVEN
+    bytesize: int = 8
+    stopbits: int = 1
+
+    def summary(self) -> str:
+        return (
+            f"RTU {self.port} @ {self.baudrate}bps "
+            f"{self.parity.value} {self.bytesize}N{self.stopbits}"
+        )
+
+
+@dataclass
+class MasterRequest:
+    function: str = "read_hr"
+    address: int = 0
+    count: int = 1
+    value: int = 0
+    device_id: int = 1
