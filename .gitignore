@@ -16,19 +16,26 @@ parts/
 sdist/
 var/
 wheels/
+share/python-wheels/
 *.egg-info/
 .installed.cfg
 *.egg
 MANIFEST
+pip-wheel-metadata/
+*.manifest
+*.spec
 
 # Virtual environments
 .venv/
 venv/
 ENV/
 env/
+.env/
+.virtualenv/
 
 # Testing / coverage
 .pytest_cache/
+.hypothesis/
 .coverage
 .coverage.*
 htmlcov/
@@ -36,31 +43,59 @@ htmlcov/
 .nox/
 coverage.xml
 *.cover
+.cache/
+nosetests.xml
+test-results/
+junit.xml
 
 # Type checkers / linters
 .mypy_cache/
 .ruff_cache/
 .pytype/
+.pyre/
+dmypy.json
+.dmypy.json
 
 # IDE / editor
 .idea/
 .vscode/
+.cursor/
 *.swp
 *.swo
 *~
 .project
 .pydevproject
 .settings/
+*.code-workspace
 
 # OS
 .DS_Store
+.DS_Store?
+._*
 Thumbs.db
+ehthumbs.db
 desktop.ini
 
 # Local settings / secrets
 .env
 .env.*
+!.env.example
 *.local
+secrets.*
+credentials.*
 
-# Build artifacts
-*.spec
+# App runtime (if ever created under the repo)
+.modbus_sim/
+settings.json
+
+# Logs / temp
+*.log
+*.tmp
+*.temp
+tmp/
+temp/
+.python-version
+
+# Font / package download leftovers (WSL font install workdirs)
+*.deb
+noto-cjk-extract/

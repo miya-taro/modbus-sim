@@ -80,6 +80,12 @@ class TestInt32:
         assert format_decoded_display(point) == "0x12345678"
         assert parse_decoded_input("0x12345678", ValueKind.INT32) == 0x12345678
 
+    def test_negative_hex_roundtrip(self) -> None:
+        point = _hr_point(0, ValueKind.INT32, -1)
+        assert format_decoded_display(point) == "0xFFFFFFFF"
+        assert parse_decoded_input("0xFFFFFFFF", ValueKind.INT32) == -1
+        assert parse_decoded_input("FFFFFFFF", ValueKind.INT32) == -1
+
 
 class TestCoil:
     def test_bool_storage(self) -> None:

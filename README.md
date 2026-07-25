@@ -110,6 +110,15 @@ TCP / RTU とも同じレイアウトです（データは独立）。
 
 RTU も同様に、「RTU スレーブ」で値を設定してから「RTU 開始」します。TCP と RTU は同時に待受でき、スレーブデータは互いに独立です。
 
+### 自動テスト（厳密）
+
+アドレス境界・全データ型・負数の16進往復・特権ポート拒否・代表 TCP ポート待受などをまとめて検証します。
+
+```bash
+pip install pytest pytest-asyncio
+QT_QPA_PLATFORM=offscreen python -m pytest tests/ -v
+```
+
 ```python
 import asyncio
 from pymodbus.client import AsyncModbusTcpClient
