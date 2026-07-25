@@ -50,8 +50,9 @@ def _write_register_point_to_block(
 
 
 class SlaveDatastore:
-    def __init__(self, slave_id: int) -> None:
+    def __init__(self, slave_id: int, owner: SlaveRegistry | None = None) -> None:
         self.slave_id = slave_id
+        self._owner = owner
         self.points: dict[tuple[int, RegisterKind], RegisterPoint] = {}
         self._coils = [False] * REGISTER_COUNT
         self._discrete_inputs = [False] * REGISTER_COUNT
@@ -75,8 +76,8 @@ class SlaveDatastore:
         )
         self.points[point.key] = point
         self._write_raw(point)
-        if structural:
-            registry.invalidate_sim_devices()
+        if structural and self._owner is not None:
+            self._owner.invalidate_sim_devices()
 
     def _simdata_for_kind(self, kind: RegisterKind) -> list[SimData]:
         points = sorted(
@@ -110,7 +111,7 @@ class SlaveDatastore:
                 )
             else:
                 value = int(point.raw)
-                if point.datatype == ValueKind.UINT16:
+                if point.datatype in (ValueKind.UINT16, ValueKind.INT16):
                     value &= 0xFFFF
                 entries.append(
                     SimData(
@@ -275,7 +276,7 @@ class SlaveDatastore:
 
 class SlaveRegistry:
     def __init__(self) -> None:
-        self._slaves: dict[int, SlaveDatastore] = {1: SlaveDatastore(1)}
+        self._slaves: dict[int, SlaveDatastore] = {1: SlaveDatastore(1, owner=self)}
         self._tags: dict[int, str] = {1: ""}
         self._activity: dict[int, float] = {}
         self.selected_slave_id = 1
@@ -317,14 +318,13 @@ class SlaveRegistry:
             raise ValueError("Slave ID は 1-247 の範囲で指定してください")
         if slave_id in self._slaves:
             raise ValueError(f"Slave ID {slave_id} は既に存在します")
-        self._slaves[slave_id] = SlaveDatastore(slave_id)
+        self._slaves[slave_id] = SlaveDatastore(slave_id, owner=self)
         self._tags[slave_id] = ""
         self.invalidate_sim_devices()
 
     def build_sim_devices(self) -> list[SimDevice]:
-        if self._sim_devices is None:
-            self._sim_devices = [slave.build_sim_device() for slave in self._slaves.values()]
-        return self._sim_devices
+        # TCP / RTU が同じ SimDevice インスタンスを共有しないよう、起動のたびに新規生成する
+        return [slave.build_sim_device() for slave in self._slaves.values()]
 
     def bind_server(self, context) -> None:
         for slave_id, runtime in context.devices.items():
@@ -376,7 +376,7 @@ class SlaveRegistry:
             slave_id = int(entry.get("id", 0))
             if not 1 <= slave_id <= 247:
                 continue
-            self._slaves[slave_id] = SlaveDatastore(slave_id)
+            self._slaves[slave_id] = SlaveDatastore(slave_id, owner=self)
             self._tags[slave_id] = str(entry.get("tag", "")).strip()
             points = entry.get("points", [])
             if isinstance(points, list):
@@ -395,7 +395,7 @@ class SlaveRegistry:
                     except (KeyError, ValueError):
                         continue
         if not self._slaves:
-            self._slaves[1] = SlaveDatastore(1)
+            self._slaves[1] = SlaveDatastore(1, owner=self)
             self._tags[1] = ""
         selected = data.get("selected_slave_id", 1)
         if selected in self._slaves:
@@ -452,13 +452,20 @@ def parse_decoded_input(value: str, datatype: ValueKind) -> int:
     elif len(text) > 1 and text[-1].lower() == "h":
         parsed = int(text[:-1], 16)
     else:
-        raise ValueError("Decoded は 0x 付き16進数で入力してください")
+        # 0x なしも 16 進として受け付ける（例: 1234 → 0x1234）
+        parsed = int(text, 16)
 
     if datatype == ValueKind.UINT16:
         return parsed & 0xFFFF
     if datatype == ValueKind.INT16:
         return parsed & 0xFFFF
-    return parsed & 0xFFFFFFFF
+    # INT32: struct.pack(">i") 向けに符号付きへ正規化（例: FFFFFFFF → -1）
+    value32 = parsed & 0xFFFFFFFF
+    if value32 >= 0x80000000:
+        value32 -= 0x100000000
+    return value32
 
 
-registry = SlaveRegistry()
+registry = SlaveRegistry()  # 後方互換（TCP と同一）
+tcp_registry = registry
+rtu_registry = SlaveRegistry()

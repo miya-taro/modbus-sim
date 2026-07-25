@@ -45,6 +45,7 @@ class SettingsPanel(QWidget):
         self.tcp_host.setEditable(True)
         self.refresh_ip_button = QPushButton("IP再検出")
         self.tcp_port = QLineEdit()
+        self.tcp_port.setPlaceholderText("例: 5020")
         self.tcp_group = QGroupBox("TCP")
         tcp_form = QFormLayout(self.tcp_group)
         ip_row = QWidget()
@@ -139,30 +140,75 @@ class SettingsPanel(QWidget):
         self._apply_mode_state()
 
     def get_tcp_config(self) -> TcpConfig:
-        if "tcp_host" not in self.comm.configured or not self.comm.tcp_host:
+        # コンボ初期表示だけでは configured に入らないため、画面上の値を正とする
+        host = self.tcp_host.currentText().strip()
+        port_text = self.tcp_port.text().strip()
+        if not host:
             raise ValueError("IP アドレスを設定してください")
-        if "tcp_port" not in self.comm.configured or self.comm.tcp_port is None:
+        if not port_text:
             raise ValueError("ポート番号を設定してください")
-        return TcpConfig(host=self.comm.tcp_host, port=self.comm.tcp_port)
+        try:
+            port = int(port_text)
+        except ValueError as exc:
+            raise ValueError("ポート番号は整数で入力してください") from exc
+        if not 1 <= port <= 65535:
+            raise ValueError("ポート番号は 1〜65535 です")
+        if port < 1024:
+            raise ValueError(
+                f"ポート {port} は特権ポートです。"
+                "Linux/WSL では root 以外バインドできません。"
+                "5020 など 1024 以上を指定してください"
+            )
+        config = TcpConfig(host=host, port=port)
+        self.comm.tcp_host = config.host
+        self.comm.tcp_port = config.port
+        self.comm.mark("tcp_host")
+        self.comm.mark("tcp_port")
+        self.update_summary()
+        return config
 
     def get_rtu_config(self) -> RtuConfig:
-        if "rtu_port" not in self.comm.configured or not self.comm.rtu_port:
+        # コンボ初期表示だけでは configured に入らないため、画面上の値を正とする
+        port = self.rtu_port.currentText().strip()
+        baud_text = self.rtu_baudrate.currentText().strip()
+        parity = self.rtu_parity.currentText().strip()
+        bytesize_text = self.rtu_bytesize.currentText().strip()
+        stopbits_text = self.rtu_stopbits.currentText().strip()
+        if not port:
             raise ValueError("シリアルポートを設定してください")
-        if "rtu_baudrate" not in self.comm.configured or self.comm.rtu_baudrate is None:
+        if not baud_text:
             raise ValueError("ボーレートを設定してください")
-        if "rtu_parity" not in self.comm.configured or not self.comm.rtu_parity:
+        if not parity:
             raise ValueError("パリティを設定してください")
-        if "rtu_bytesize" not in self.comm.configured or self.comm.rtu_bytesize is None:
+        if not bytesize_text:
             raise ValueError("データビットを設定してください")
-        if "rtu_stopbits" not in self.comm.configured or self.comm.rtu_stopbits is None:
+        if not stopbits_text:
             raise ValueError("ストップビットを設定してください")
-        return RtuConfig(
-            port=self.comm.rtu_port,
-            baudrate=self.comm.rtu_baudrate,
-            parity=Parity(self.comm.rtu_parity),
-            bytesize=self.comm.rtu_bytesize,
-            stopbits=self.comm.rtu_stopbits,
+        try:
+            baudrate = int(baud_text)
+            bytesize = int(bytesize_text)
+            stopbits = int(stopbits_text)
+        except ValueError as exc:
+            raise ValueError("RTU の数値項目が不正です") from exc
+        config = RtuConfig(
+            port=port,
+            baudrate=baudrate,
+            parity=Parity(parity),
+            bytesize=bytesize,
+            stopbits=stopbits,
         )
+        self.comm.rtu_port = config.port
+        self.comm.rtu_baudrate = config.baudrate
+        self.comm.rtu_parity = config.parity.value
+        self.comm.rtu_bytesize = config.bytesize
+        self.comm.rtu_stopbits = config.stopbits
+        self.comm.mark("rtu_port")
+        self.comm.mark("rtu_baudrate")
+        self.comm.mark("rtu_parity")
+        self.comm.mark("rtu_bytesize")
+        self.comm.mark("rtu_stopbits")
+        self.update_summary()
+        return config
 
     def to_dict(self) -> dict[str, Any]:
         data: dict[str, Any] = {}

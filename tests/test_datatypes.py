@@ -40,6 +40,8 @@ class TestUint16:
         assert decode_value(point) == 4660
         assert format_decoded_display(point) == "0x1234"
         assert parse_decoded_input("0x1234", ValueKind.UINT16) == 4660
+        assert parse_decoded_input("1234", ValueKind.UINT16) == 4660
+        assert parse_decoded_input("1234h", ValueKind.UINT16) == 4660
 
 
 class TestInt16:
@@ -216,3 +218,40 @@ async def test_tcp_ipv6_loopback() -> None:
         client.close()
     finally:
         await mgr.stop_tcp()
+
+
+def test_build_sim_devices_returns_independent_instances() -> None:
+    """同一レジストリでも起動ごとに別 SimDevice を返すこと。"""
+    reg = SlaveRegistry()
+    reg.get_slave(1).upsert_point(_hr_point(0, ValueKind.UINT16, 1))
+    first = reg.build_sim_devices()
+    second = reg.build_sim_devices()
+    assert first is not second
+    assert first[0] is not second[0]
+    assert first[0].id == second[0].id
+
+
+@pytest.mark.asyncio
+async def test_tcp_and_rtu_use_separate_registries() -> None:
+    """TCP と RTU で別レジストリを渡すと、値が混ざらないこと。"""
+    tcp_reg = SlaveRegistry()
+    rtu_reg = SlaveRegistry()
+    tcp_reg.get_slave(1).upsert_point(_hr_point(0, ValueKind.UINT16, 111))
+    rtu_reg.get_slave(1).upsert_point(_hr_point(0, ValueKind.UINT16, 222))
+
+    mgr = ModbusServerManager(tcp_registry=tcp_reg, rtu_registry=rtu_reg)
+    port = 15027
+    await mgr.start_tcp(TcpConfig(host="127.0.0.1", port=port))
+    try:
+        from pymodbus.client import AsyncModbusTcpClient
+
+        client = AsyncModbusTcpClient("127.0.0.1", port=port)
+        await client.connect()
+        result = await client.read_holding_registers(0, count=1, device_id=1)
+        assert not result.isError()
+        assert result.registers == [111]
+        client.close()
+    finally:
+        await mgr.stop_tcp()
+
+    assert rtu_reg.get_slave(1).read_raw(RegisterKind.HOLDING_REGISTER, 0) == 222

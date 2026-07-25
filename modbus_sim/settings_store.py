@@ -6,7 +6,7 @@ import json
 from pathlib import Path
 from typing import Any
 
-from modbus_sim.datastore import SlaveRegistry, registry
+from modbus_sim.datastore import SlaveRegistry, rtu_registry, tcp_registry
 from modbus_sim.ui.settings_panel import SettingsPanel
 
 
@@ -31,14 +31,19 @@ class SettingsStore:
     def save(
         self,
         settings_panel: SettingsPanel,
-        slave_registry: SlaveRegistry | None = None,
+        tcp_slaves: SlaveRegistry | None = None,
+        rtu_slaves: SlaveRegistry | None = None,
     ) -> None:
-        reg = slave_registry or registry
+        tcp_reg = tcp_slaves or tcp_registry
+        rtu_reg = rtu_slaves or rtu_registry
+        panel = settings_panel.to_dict()
         payload = {
-            "tcp": settings_panel.to_dict().get("tcp", {}),
-            "rtu": settings_panel.to_dict().get("rtu", {}),
-            "slaves": reg.to_dict()["slaves"],
-            "selected_slave_id": reg.selected_slave_id,
+            "tcp": panel.get("tcp", {}),
+            "rtu": panel.get("rtu", {}),
+            "tcp_slaves": tcp_reg.to_dict()["slaves"],
+            "tcp_selected_slave_id": tcp_reg.selected_slave_id,
+            "rtu_slaves": rtu_reg.to_dict()["slaves"],
+            "rtu_selected_slave_id": rtu_reg.selected_slave_id,
         }
         self._path.parent.mkdir(parents=True, exist_ok=True)
         with self._path.open("w", encoding="utf-8") as handle:
@@ -47,12 +52,31 @@ class SettingsStore:
     def apply(
         self,
         settings_panel: SettingsPanel,
-        slave_registry: SlaveRegistry | None = None,
+        tcp_slaves: SlaveRegistry | None = None,
+        rtu_slaves: SlaveRegistry | None = None,
     ) -> None:
         data = self.load()
         if not data:
             return
         settings_panel.apply_settings(data)
-        reg = slave_registry or registry
-        if "slaves" in data:
-            reg.load_from_dict(data)
+        tcp_reg = tcp_slaves or tcp_registry
+        rtu_reg = rtu_slaves or rtu_registry
+
+        if "tcp_slaves" in data:
+            tcp_reg.load_from_dict(
+                {
+                    "slaves": data.get("tcp_slaves", []),
+                    "selected_slave_id": data.get("tcp_selected_slave_id", 1),
+                }
+            )
+        elif "slaves" in data:
+            # 旧形式: 共通 slaves → TCP 側へ移行
+            tcp_reg.load_from_dict(data)
+
+        if "rtu_slaves" in data:
+            rtu_reg.load_from_dict(
+                {
+                    "slaves": data.get("rtu_slaves", []),
+                    "selected_slave_id": data.get("rtu_selected_slave_id", 1),
+                }
+            )

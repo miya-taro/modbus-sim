@@ -8,7 +8,7 @@ from collections.abc import Callable
 from datetime import datetime
 
 from modbus_sim.config import CommMode, RtuConfig, TcpConfig
-from modbus_sim.datastore import SlaveRegistry, registry
+from modbus_sim.datastore import SlaveRegistry
 from modbus_sim.logging_handler import LoggingModbusSerialServer, LoggingModbusTcpServer
 
 
@@ -25,12 +25,24 @@ def _parse_slave_id(mode: CommMode, sending: bool, packet: bytes) -> int | None:
 class ModbusServerManager:
     def __init__(
         self,
+        tcp_registry: SlaveRegistry | None = None,
+        rtu_registry: SlaveRegistry | None = None,
+        *,
         slave_registry: SlaveRegistry | None = None,
         on_log: Callable[[str], None] | None = None,
         on_tcp_state_change: Callable[[bool], None] | None = None,
         on_rtu_state_change: Callable[[bool], None] | None = None,
     ) -> None:
-        self._registry = slave_registry or registry
+        # slave_registry はテスト互換: 指定時は TCP/RTU 両方に同じレジストリを使う
+        if slave_registry is not None:
+            self._tcp_registry = slave_registry
+            self._rtu_registry = slave_registry
+        else:
+            from modbus_sim.datastore import rtu_registry as default_rtu
+            from modbus_sim.datastore import tcp_registry as default_tcp
+
+            self._tcp_registry = tcp_registry if tcp_registry is not None else default_tcp
+            self._rtu_registry = rtu_registry if rtu_registry is not None else default_rtu
         self._tcp_server: LoggingModbusTcpServer | None = None
         self._rtu_server: LoggingModbusSerialServer | None = None
         self._tcp_task: asyncio.Task | None = None
@@ -39,6 +51,9 @@ class ModbusServerManager:
         self._on_tcp_state_change = on_tcp_state_change
         self._on_rtu_state_change = on_rtu_state_change
         self.log_buffer: deque[str] = deque(maxlen=500)
+
+    def _registry_for(self, mode: CommMode) -> SlaveRegistry:
+        return self._tcp_registry if mode == CommMode.TCP else self._rtu_registry
 
     @property
     def tcp_running(self) -> bool:
@@ -73,6 +88,8 @@ class ModbusServerManager:
         )
 
     def _make_trace_packet(self, mode: CommMode):
+        registry = self._registry_for(mode)
+
         def _trace_packet(sending: bool, packet: bytes) -> bytes:
             direction = "TX" if sending else "RX"
             hex_bytes = packet.hex(" ").upper()
@@ -80,7 +97,7 @@ class ModbusServerManager:
             self._emit_log(f"[{timestamp}] {mode.value.upper()} {direction} {hex_bytes}")
             slave_id = _parse_slave_id(mode, sending, packet)
             if slave_id is not None:
-                self._registry.touch_activity(slave_id)
+                registry.touch_activity(slave_id)
             return packet
 
         return _trace_packet
@@ -95,13 +112,15 @@ class ModbusServerManager:
         if self.tcp_running:
             raise RuntimeError("TCP server is already running")
         self._tcp_server = LoggingModbusTcpServer(
-            self._registry.build_sim_devices(),
+            self._tcp_registry.build_sim_devices(),
             address=(config.host, config.port),
             trace_packet=self._make_trace_packet(CommMode.TCP),
             on_invalid=self._make_on_invalid(CommMode.TCP),
         )
-        self._tcp_task = asyncio.create_task(self._tcp_server.serve_forever())
-        self._registry.bind_server(self._tcp_server.context)
+        # background=True: listen 完了後に戻る（クライアント接続前に待受準備を完了させる）
+        await self._tcp_server.serve_forever(background=True)
+        self._tcp_task = None
+        self._tcp_registry.bind_server(self._tcp_server.context)
         self._emit_tcp_state(True)
         self._emit_log(
             f"[{datetime.now():%Y-%m-%d %H:%M:%S}] TCP server started on "
@@ -112,7 +131,7 @@ class ModbusServerManager:
         if self.rtu_running:
             raise RuntimeError("RTU server is already running")
         self._rtu_server = LoggingModbusSerialServer(
-            self._registry.build_sim_devices(),
+            self._rtu_registry.build_sim_devices(),
             port=config.port,
             baudrate=config.baudrate,
             parity=config.parity.to_pyserial(),
@@ -121,8 +140,9 @@ class ModbusServerManager:
             trace_packet=self._make_trace_packet(CommMode.RTU),
             on_invalid=self._make_on_invalid(CommMode.RTU),
         )
-        self._rtu_task = asyncio.create_task(self._rtu_server.serve_forever())
-        self._registry.bind_server(self._rtu_server.context)
+        await self._rtu_server.serve_forever(background=True)
+        self._rtu_task = None
+        self._rtu_registry.bind_server(self._rtu_server.context)
         self._emit_rtu_state(True)
         self._emit_log(
             f"[{datetime.now():%Y-%m-%d %H:%M:%S}] RTU server started on "
@@ -137,7 +157,7 @@ class ModbusServerManager:
         self._tcp_server = None
         self._tcp_task = None
         if server is not None:
-            self._registry.unbind_server(server.context)
+            self._tcp_registry.unbind_server(server.context)
             await server.shutdown()
         if task is not None:
             task.cancel()
@@ -156,7 +176,7 @@ class ModbusServerManager:
         self._rtu_server = None
         self._rtu_task = None
         if server is not None:
-            self._registry.unbind_server(server.context)
+            self._rtu_registry.unbind_server(server.context)
             await server.shutdown()
         if task is not None:
             task.cancel()

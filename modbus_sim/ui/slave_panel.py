@@ -7,6 +7,7 @@ from collections.abc import Callable
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
     QAbstractItemView,
+    QComboBox,
     QGroupBox,
     QHBoxLayout,
     QLabel,
@@ -33,6 +34,9 @@ from modbus_sim.models import RegisterPoint
 
 GRID_COLUMNS = ("Addr", "Raw", "Decoded", "Datatype", "Tag")
 GRID_FIELDS = ("addr", "raw", "decoded", "datatype", "tag")
+DATATYPE_COL = GRID_FIELDS.index("datatype")
+# レジスタ表で選べる型（自由入力で不正値にならないようリスト固定）
+DATATYPE_CHOICES = (ValueKind.UINT16, ValueKind.INT16, ValueKind.INT32)
 
 _ACTIVITY_COLORS = {
     "active": "green",
@@ -46,6 +50,8 @@ class SlavePanel(QWidget):
         self,
         slave_registry: SlaveRegistry | None = None,
         on_change: Callable[[], None] | None = None,
+        *,
+        title: str = "スレーブ設定値",
     ) -> None:
         super().__init__()
         self._registry = slave_registry or registry
@@ -97,7 +103,7 @@ class SlavePanel(QWidget):
 
         right = QVBoxLayout()
         right.addWidget(
-            QLabel("Raw = 10進 / Decoded = 16進（0x）。セル編集後に確定されます。")
+            QLabel("Raw = 10進 / Decoded = 16進（0x あり・なし可）。セル編集後に確定されます。")
         )
         right.addWidget(self.table, stretch=1)
 
@@ -106,7 +112,7 @@ class SlavePanel(QWidget):
         body.addLayout(right, stretch=1)
 
         layout = QVBoxLayout(self)
-        layout.addWidget(QLabel("スレーブ設定値", styleSheet="font-weight: bold; font-size: 13px;"))
+        layout.addWidget(QLabel(title, styleSheet="font-weight: bold; font-size: 13px;"))
         layout.addLayout(body)
         layout.addWidget(self._status)
 
@@ -176,6 +182,18 @@ class SlavePanel(QWidget):
         layout.addWidget(text, stretch=1)
         return row, dot
 
+    def _make_datatype_combo(self, row_index: int, current: ValueKind) -> QComboBox:
+        combo = QComboBox()
+        for kind in DATATYPE_CHOICES:
+            combo.addItem(kind.value, kind)
+        index = combo.findData(current if current in DATATYPE_CHOICES else ValueKind.UINT16)
+        combo.setCurrentIndex(max(index, 0))
+        combo.setEnabled(self._grid_enabled)
+        combo.currentIndexChanged.connect(
+            lambda _idx, r=row_index: self._on_datatype_changed(r)
+        )
+        return combo
+
     def _rebuild_table(self) -> None:
         slave = self._registry.get_slave(self._registry.selected_slave_id)
         points = slave.list_points()
@@ -191,9 +209,14 @@ class SlavePanel(QWidget):
             addr_value = "" if source.address < 0 else str(source.address)
             raw_value = "" if source.address < 0 and point is None and not self._draft else str(source.raw)
             decoded_value = "" if source.address < 0 else format_decoded_display(source)
-            values = [addr_value, raw_value, decoded_value, source.datatype.value, source.tag]
+            values = [addr_value, raw_value, decoded_value, None, source.tag]
             for col, text in enumerate(values):
-                item = QTableWidgetItem(text)
+                if col == DATATYPE_COL:
+                    self.table.setCellWidget(
+                        row_index, col, self._make_datatype_combo(row_index, source.datatype)
+                    )
+                    continue
+                item = QTableWidgetItem(text or "")
                 if not self._grid_enabled:
                     item.setFlags(item.flags() & ~Qt.ItemFlag.ItemIsEditable)
                 self.table.setItem(row_index, col, item)
@@ -212,8 +235,28 @@ class SlavePanel(QWidget):
         if self._on_change:
             self._on_change()
 
+    def _on_datatype_changed(self, row: int) -> None:
+        if self._updating_table or not self._grid_enabled:
+            return
+        combo = self.table.cellWidget(row, DATATYPE_COL)
+        if not isinstance(combo, QComboBox):
+            return
+        kind = combo.currentData()
+        if not isinstance(kind, ValueKind):
+            return
+        point = self._row_meta[row] if row < len(self._row_meta) else None
+        self._commit_cell(
+            self._registry.selected_slave_id,
+            point,
+            "datatype",
+            kind.value,
+            row_index=row,
+        )
+
     def _on_cell_changed(self, row: int, col: int) -> None:
         if self._updating_table or not self._grid_enabled:
+            return
+        if col == DATATYPE_COL:
             return
         item = self.table.item(row, col)
         if item is None:
@@ -265,6 +308,10 @@ class SlavePanel(QWidget):
                 if not value.strip():
                     return False
                 updated.datatype = ValueKind(value.strip())
+                if updated.datatype not in DATATYPE_CHOICES:
+                    raise ValueError(
+                        f"Datatype は {', '.join(k.value for k in DATATYPE_CHOICES)} から選択してください"
+                    )
             elif field == "tag":
                 updated.tag = value.strip()
             else:
@@ -288,7 +335,7 @@ class SlavePanel(QWidget):
             self._draft = None
             self._status.setText("")
 
-            if structural:
+            if structural or field == "datatype":
                 self._rebuild_table()
             elif row_index is not None:
                 self._row_meta[row_index] = updated
@@ -309,14 +356,18 @@ class SlavePanel(QWidget):
             updates[1] = str(point.raw)
         if edited_field != "decoded":
             updates[2] = format_decoded_display(point)
-        if edited_field != "datatype":
-            updates[3] = point.datatype.value
         if edited_field != "tag":
             updates[4] = point.tag
         for col_index, text in updates.items():
             item = self.table.item(row_index, col_index)
             if item is not None:
                 item.setText(text)
+        if edited_field != "datatype":
+            combo = self.table.cellWidget(row_index, DATATYPE_COL)
+            if isinstance(combo, QComboBox):
+                index = combo.findData(point.datatype)
+                if index >= 0:
+                    combo.setCurrentIndex(index)
         self._updating_table = False
 
     def _save_slave_tag(self, text: str) -> None:
