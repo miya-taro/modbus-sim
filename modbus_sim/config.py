@@ -35,7 +35,8 @@ class ValueKind(str, Enum):
 
 
 BAUD_RATES = (9600, 19200, 38400, 115200)
-DATA_BITS = (7, 8)
+# 先頭がデフォルト表示になる（仕様既定: 8 data bits）
+DATA_BITS = (8, 7)
 STOP_BITS = (1, 2)
 REGISTER_COUNT = 65536
 ACTIVITY_TIMEOUT_SEC = 3.0

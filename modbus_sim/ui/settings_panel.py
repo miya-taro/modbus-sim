@@ -119,16 +119,27 @@ class SettingsPanel(QWidget):
 
     def refresh_serial_ports(self) -> None:
         ports = [port.device for port in list_ports.comports()]
-        if not ports:
-            ports = ["COM1"]
-        current = self.rtu_port.currentText()
+        current = self.rtu_port.currentText().strip()
         self.rtu_port.blockSignals(True)
         self.rtu_port.clear()
-        self.rtu_port.addItems(ports)
-        if current:
-            if current not in ports:
+        if ports:
+            self.rtu_port.addItems(ports)
+            if current and current not in ports:
                 self.rtu_port.addItem(current)
-            self.rtu_port.setCurrentText(current)
+                self.rtu_port.setCurrentText(current)
+            elif current in ports:
+                self.rtu_port.setCurrentText(current)
+        else:
+            # 実在しない COM1 / ttyS* を仮置きしない（起動できないため）
+            self.rtu_port.setEditable(True)
+            self.rtu_port.lineEdit().setPlaceholderText(
+                "シリアルポート未検出（例: COM3 / /dev/ttyUSB0）"
+            )
+            if current:
+                self.rtu_port.addItem(current)
+                self.rtu_port.setCurrentText(current)
+            else:
+                self.rtu_port.setCurrentIndex(-1)
         self.rtu_port.blockSignals(False)
 
     def set_tcp_settings_enabled(self, enabled: bool) -> None:
@@ -153,11 +164,14 @@ class SettingsPanel(QWidget):
             raise ValueError("ポート番号は整数で入力してください") from exc
         if not 1 <= port <= 65535:
             raise ValueError("ポート番号は 1〜65535 です")
-        if port < 1024:
+        from modbus_sim.platform_util import privileged_tcp_ports_restricted
+
+        if privileged_tcp_ports_restricted() and port < 1024:
             raise ValueError(
                 f"ポート {port} は特権ポートです。"
                 "Linux/WSL では root 以外バインドできません。"
                 "5020 など 1024 以上を指定してください"
+                "（ネイティブ Windows では 502 も利用可能です）"
             )
         config = TcpConfig(host=host, port=port)
         self.comm.tcp_host = config.host
@@ -287,15 +301,24 @@ class SettingsPanel(QWidget):
         self.rtu_baudrate.clear()
         for rate in BAUD_RATES:
             self.rtu_baudrate.addItem(str(rate))
+        self.rtu_baudrate.setCurrentText("9600")
+
         self.rtu_parity.clear()
         for parity in Parity:
             self.rtu_parity.addItem(parity.value)
+        # 仕様既定: Even
+        self.rtu_parity.setCurrentText(Parity.EVEN.value)
+
         self.rtu_bytesize.clear()
         for bits in DATA_BITS:
             self.rtu_bytesize.addItem(str(bits))
+        # 仕様既定: 8（DATA_BITS 先頭も 8）
+        self.rtu_bytesize.setCurrentText("8")
+
         self.rtu_stopbits.clear()
         for bits in STOP_BITS:
             self.rtu_stopbits.addItem(str(bits))
+        self.rtu_stopbits.setCurrentText("1")
 
     def _wire_handlers(self) -> None:
         self.tcp_host.currentTextChanged.connect(lambda t: self._set_tcp_host(t))

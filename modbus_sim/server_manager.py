@@ -10,6 +10,7 @@ from datetime import datetime
 from modbus_sim.config import CommMode, RtuConfig, TcpConfig
 from modbus_sim.datastore import SlaveRegistry
 from modbus_sim.logging_handler import LoggingModbusSerialServer, LoggingModbusTcpServer
+from modbus_sim.packet_log import detect_invalid_tcp_frame, format_trace_log_line
 
 
 def _parse_slave_id(mode: CommMode, sending: bool, packet: bytes) -> int | None:
@@ -91,10 +92,14 @@ class ModbusServerManager:
         registry = self._registry_for(mode)
 
         def _trace_packet(sending: bool, packet: bytes) -> bytes:
-            direction = "TX" if sending else "RX"
-            hex_bytes = packet.hex(" ").upper()
             timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-            self._emit_log(f"[{timestamp}] {mode.value.upper()} {direction} {hex_bytes}")
+            # TCP の明らかに不正なフレームは INVALID として記録（RX のみ）
+            if not sending and mode == CommMode.TCP:
+                reason = detect_invalid_tcp_frame(packet)
+                if reason is not None:
+                    self._log_invalid(mode, packet, reason)
+                    return packet
+            self._emit_log(format_trace_log_line(mode, sending, packet, timestamp=timestamp))
             slave_id = _parse_slave_id(mode, sending, packet)
             if slave_id is not None:
                 registry.touch_activity(slave_id)

@@ -7,10 +7,10 @@ from collections.abc import Callable
 from PySide6.QtWidgets import QHBoxLayout, QLabel, QPushButton, QTextEdit, QVBoxLayout, QWidget
 
 LOG_EXAMPLES = """# ログ出力例
-[2026-07-07 22:00:01] TCP RX 00 01 00 00 00 06 01 03 00 00 00 0A
-[2026-07-07 22:00:01] TCP TX 00 01 00 00 00 17 01 03 14 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00
-[2026-07-07 22:00:02] RTU RX 01 03 00 00 00 0A C5 CD
-[2026-07-07 22:00:02] RTU TX 01 03 14 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 D0 0F"""
+[2026-07-07 22:00:01] TCP RX device=1 FC=03 ReadHoldingRegisters addr=0 count=10 | 00 01 00 00 00 06 01 03 00 00 00 0A
+[2026-07-07 22:00:01] TCP TX device=1 FC=03 ReadHoldingRegisters values=[0,0,...] | 00 01 00 00 00 17 01 03 14 ...
+[2026-07-07 22:00:02] RTU RX device=1 FC=03 ReadHoldingRegisters addr=0 count=10 | 01 03 00 00 00 0A C5 CD
+[2026-07-07 22:00:03] TCP INVALID Unable to decode request: FF FF 00 01 00 00"""
 
 
 class LogPanel(QWidget):
@@ -21,7 +21,7 @@ class LogPanel(QWidget):
 
         header = QHBoxLayout()
         header.addWidget(QLabel("通信ログ", styleSheet="font-weight: bold; font-size: 13px;"))
-        header.addWidget(QLabel("RX/TX の生パケット（16進）を表示します"))
+        header.addWidget(QLabel("RX/TX の要約（FC/アドレス/値）と生パケット（16進）を表示します"))
         header.addStretch()
         self.clear_button = QPushButton("クリア")
         self.clear_button.clicked.connect(self._on_clear_click)

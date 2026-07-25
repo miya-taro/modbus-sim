@@ -179,7 +179,11 @@ class TestDatatypeHexRoundtrip:
 
 class TestTcpPortPolicy:
     @pytest.mark.parametrize("port", [1, 22, 80, 443, 502, 1023])
-    def test_privileged_ports_rejected_by_ui(self, port: int, qapp: QApplication) -> None:
+    def test_privileged_ports_rejected_on_linux(self, port: int, qapp: QApplication) -> None:
+        from modbus_sim.platform_util import privileged_tcp_ports_restricted
+
+        if not privileged_tcp_ports_restricted():
+            pytest.skip("privileged port restriction is Linux/WSL only")
         panel = SettingsPanel()
         panel.tcp_host.setCurrentText("127.0.0.1")
         panel.tcp_port.setText(str(port))
@@ -201,6 +205,34 @@ class TestTcpPortPolicy:
         panel.tcp_port.setText(str(port))
         config = panel.get_tcp_config()
         assert config.port == port
+
+    def test_port_502_allowed_when_not_restricted(self, qapp: QApplication, monkeypatch) -> None:
+        monkeypatch.setattr(
+            "modbus_sim.platform_util.privileged_tcp_ports_restricted",
+            lambda: False,
+        )
+        panel = SettingsPanel()
+        panel.tcp_host.setCurrentText("127.0.0.1")
+        panel.tcp_port.setText("502")
+        assert panel.get_tcp_config().port == 502
+
+
+class TestRtuDefaults:
+    def test_default_rtu_framing_matches_spec(self, qapp: QApplication) -> None:
+        panel = SettingsPanel()
+        assert panel.rtu_baudrate.currentText() == "9600"
+        assert panel.rtu_parity.currentText() == "Even"
+        assert panel.rtu_bytesize.currentText() == "8"
+        assert panel.rtu_stopbits.currentText() == "1"
+
+    def test_no_fake_serial_when_none_detected(self, qapp: QApplication, monkeypatch) -> None:
+        monkeypatch.setattr(
+            "modbus_sim.ui.settings_panel.list_ports.comports",
+            lambda: [],
+        )
+        panel = SettingsPanel()
+        assert panel.rtu_port.count() == 0
+        assert panel.rtu_port.currentText() == ""
 
 
 @pytest.fixture(scope="module")

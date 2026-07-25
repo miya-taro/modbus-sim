@@ -23,6 +23,8 @@ from PySide6.QtWidgets import (
 
 from modbus_sim.config import TcpConfig
 from modbus_sim.datastore import rtu_registry, tcp_registry
+from modbus_sim.fonts_util import ensure_cjk_fonts
+from modbus_sim.platform_util import is_wsl
 from modbus_sim.server_manager import ModbusServerManager
 from modbus_sim.settings_store import SettingsStore
 from modbus_sim.ui.async_runner import AsyncRunner
@@ -285,12 +287,7 @@ class MainWindow(QMainWindow):
 
 
 def _is_wsl() -> bool:
-    try:
-        if Path("/mnt/wslg").exists():
-            return True
-        return "microsoft" in Path("/proc/version").read_text().lower()
-    except OSError:
-        return False
+    return is_wsl()
 
 
 def _xcb_libs_available() -> bool:
@@ -299,6 +296,7 @@ def _xcb_libs_available() -> bool:
         "libxcb-icccm.so.4",
         "libxcb-keysyms.so.1",
         "libxcb-shape.so.0",
+        "libxkbcommon-x11.so.0",
     ):
         try:
             ctypes.CDLL(name)
@@ -311,16 +309,18 @@ def _prepare_qt_platform() -> None:
     """WSLg では Wayland より X11(xcb) の方がウィンドウが出やすい。"""
     if os.environ.get("QT_QPA_PLATFORM"):
         return
-    if not _is_wsl():
+    if not is_wsl():
         return
     if _xcb_libs_available():
         os.environ["QT_QPA_PLATFORM"] = "xcb"
         os.environ.pop("WAYLAND_DISPLAY", None)
         return
+    # xcb が使えなくても Wayland で起動を試みる（COPY MODE 警告が出ることがある）
     print(
-        "注意: WSL で GUI ウィンドウが表示されない場合は、次を実行してから再起動してください:\n"
+        "注意: WSL でウィンドウが不安定な場合は次を実行してください:\n"
         "  sudo apt install -y libxcb-cursor0 libxcb-icccm4 libxcb-keysyms1 "
-        "libxcb-shape0 libxkbcommon-x11-0",
+        "libxcb-shape0 libxkbcommon-x11-0\n"
+        "  export QT_QPA_PLATFORM=xcb",
         flush=True,
     )
 
@@ -379,6 +379,7 @@ def _apply_ui_font(app: QApplication) -> None:
 
 def create_app() -> int:
     _prepare_qt_platform()
+    ensure_cjk_fonts()
     app = QApplication.instance() or QApplication(sys.argv)
     app.setQuitOnLastWindowClosed(True)
     _apply_ui_font(app)

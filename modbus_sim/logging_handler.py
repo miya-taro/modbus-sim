@@ -11,6 +11,8 @@ from pymodbus.server import ModbusSerialServer, ModbusTcpServer
 from pymodbus.server.requesthandler import ServerRequestHandler
 from pymodbus.transaction import TransactionManager
 
+from modbus_sim.packet_log import detect_invalid_tcp_frame
+
 
 class LoggingServerRequestHandler(ServerRequestHandler):
     def __init__(
@@ -25,12 +27,18 @@ class LoggingServerRequestHandler(ServerRequestHandler):
         super().__init__(owner, trace_packet, trace_pdu, trace_connect)
 
     def callback_data(self, data: bytes, addr: tuple | None = None) -> int:
+        # 受信バッファ先頭が明らかな不正 TCP なら INVALID を出して破棄
+        reason = detect_invalid_tcp_frame(data)
+        if reason is not None and self._on_invalid:
+            self._on_invalid(data, reason)
+            return len(data)
         try:
             used_len = TransactionManager.callback_data(self, data, addr)
         except ModbusIOException as exc:
             if self._on_invalid:
                 self._on_invalid(data, str(exc))
-            response = ExceptionResponse(40, exception_code=ExcCodes.ILLEGAL_FUNCTION)
+            # FC=40 は非標準なので、一般的な Read Holding の例外として返す
+            response = ExceptionResponse(0x03, exception_code=ExcCodes.ILLEGAL_FUNCTION)
             self.server_send(response, 0)
             return len(data)
         if self.last_pdu:

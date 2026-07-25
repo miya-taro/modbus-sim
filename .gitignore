@@ -35,6 +35,7 @@ env/
 
 # Testing / coverage
 .pytest_cache/
+pytest-cache-files-*/
 .hypothesis/
 .coverage
 .coverage.*
