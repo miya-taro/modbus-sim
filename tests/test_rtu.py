@@ -72,6 +72,37 @@ async def test_rtu_read_write_over_nullmodem() -> None:
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(("address", "channel"), [(1, 23), (256, 24), (0x1234, 25)])
+async def test_rtu_read_nonzero_address_over_nullmodem(address: int, channel: int) -> None:
+    """アドレスの上位/下位バイトが非ゼロでも RTU 通信できること。
+
+    RTU フレームの addr フィールドを TCP の MBAP protocol_id と誤認すると、
+    正常なフレームが INVALID 扱いで握りつぶされていた（回帰防止）。
+    """
+    reg = SlaveRegistry()
+    reg.get_slave(1).upsert_point(_hr(address, 42))
+    mgr = ModbusServerManager(slave_registry=reg)
+    serial_port = _nullmodem_port(channel)
+    config = RtuConfig(port=serial_port, baudrate=9600, parity=Parity.EVEN, bytesize=8, stopbits=1)
+    await mgr.start_rtu(config)
+    client = None
+    try:
+        client = AsyncModbusSerialClient(
+            port=serial_port, baudrate=9600, parity="E", bytesize=8, stopbits=1
+        )
+        assert await client.connect()
+        await asyncio.sleep(0.05)
+        result = await client.read_holding_registers(address, count=1, device_id=1)
+        assert not result.isError(), result
+        assert result.registers == [42]
+        assert not any("INVALID" in line for line in mgr.log_buffer)
+    finally:
+        if client is not None:
+            client.close()
+        await mgr.stop_rtu()
+
+
+@pytest.mark.asyncio
 async def test_tcp_and_rtu_independent_via_nullmodem() -> None:
     from pymodbus.client import AsyncModbusTcpClient
 

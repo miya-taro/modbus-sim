@@ -7,7 +7,7 @@ Modbus 通信の開発・テスト向けに、**TCP / RTU スレーブを同時�
 - **TCP / RTU 同時待受**: 右上のボタンでそれぞれ独立に開始・停止
 - **経路別スレーブ**: 「TCP スレーブ」「RTU スレーブ」タブでデータを完全分離（同じ Slave ID でも中身は独立）
 - **複数 Slave ID**: 1〜247。機器名（タグ）付き。通信状態丸（緑=直近通信 / 灰=待受中未通信 / 薄灰=停止中）
-- **レジスタ編集**: Addr / Raw / Decoded / Datatype / Tag を表内で編集。Datatype は `uint16` / `int16` / `int32` のリスト選択
+- **レジスタ編集**: Addr / Kind / Raw / Decoded / Datatype / Tag を表内で編集。Kind は `Coil` / `Discrete Input` / `Holding Register` / `Input Register` から選択。Datatype は Holding/Input Register のみ `uint16` / `int16` / `int32` のリスト選択（Coil/Discrete Input は `bool` 固定）
 - **Raw / Decoded 連動**: Raw は10進、Decoded は16進（`0x` あり・なし両方可）。負数も16進往復可能
 - **アドレス**: 0〜65535（`int32` は 0〜65534）。設定済みアドレスのみサーバ側に構築するため、高アドレスでも起動は高速
 - **通信設定**: TCP（IPv4/IPv6）と RTU（ポート・ボーレート・パリティ・Data bits・Stop bits）を常時表示。待受中は該当側のみロック
@@ -68,16 +68,18 @@ python main.py
 - **左**: Slave ID 一覧（状態丸 + ID + 機器名）、機器名編集、`+` で追加
 - **右**: 選択中スレーブの設定値グリッド
 
-### Raw / Decoded / Datatype
+### Kind / Raw / Decoded / Datatype
 
 | 列 | 意味 | 例 |
 |---|---|---|
-| **Raw** | メモリ上の10進 | `4660` / `-1`（int16/int32） |
+| **Kind** | `Coil` / `Discrete Input` / `Holding Register` / `Input Register` | コンボで選択 |
+| **Raw** | メモリ上の10進 | `4660` / `-1`（int16/int32）、`0`/`1`（Coil/Discrete Input） |
 | **Decoded** | 同じ値の16進表示 | `0x1234` / `0xFFFF`（-1 の int16） |
-| **Datatype** | `uint16` / `int16` / `int32` | コンボで選択 |
+| **Datatype** | `uint16` / `int16` / `int32`（Coil/Discrete Input は `bool` 固定） | コンボで選択 |
 
 - Decoded は `0x1234` でも `1234` でも可（どちらも16進）
-- `int32` は指定アドレスと次アドレスの 2 レジスタ（big-endian）。Addr は **65534 以下**
+- `int32` は指定アドレスと次アドレスの 2 レジスタ（big-endian）。Addr は **65534 以下**（Holding/Input Register のみ）
+- Coil / Discrete Input は 1 アドレス = 1bit。Kind を切り替えると Datatype は自動的に対応する値に揃う
 
 ## デフォルト
 

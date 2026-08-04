@@ -70,12 +70,3 @@ class RtuConfig:
             f"RTU {self.port} @ {self.baudrate}bps "
             f"{self.parity.value} {self.bytesize}N{self.stopbits}"
         )
-
-
-@dataclass
-class MasterRequest:
-    function: str = "read_hr"
-    address: int = 0
-    count: int = 1
-    value: int = 0
-    device_id: int = 1

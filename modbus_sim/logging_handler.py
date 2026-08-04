@@ -22,16 +22,21 @@ class LoggingServerRequestHandler(ServerRequestHandler):
         trace_pdu,
         trace_connect,
         on_invalid: Callable[[bytes, str], None] | None = None,
+        *,
+        is_tcp: bool = False,
     ) -> None:
         self._on_invalid = on_invalid
+        self._is_tcp = is_tcp
         super().__init__(owner, trace_packet, trace_pdu, trace_connect)
 
     def callback_data(self, data: bytes, addr: tuple | None = None) -> int:
-        # 受信バッファ先頭が明らかな不正 TCP なら INVALID を出して破棄
-        reason = detect_invalid_tcp_frame(data)
-        if reason is not None and self._on_invalid:
-            self._on_invalid(data, reason)
-            return len(data)
+        # MBAP ヘッダ検査は TCP 専用（RTU フレームに適用するとアドレス値を
+        # protocol_id と誤認し、正常なフレームを破棄してしまう）
+        if self._is_tcp:
+            reason = detect_invalid_tcp_frame(data)
+            if reason is not None and self._on_invalid:
+                self._on_invalid(data, reason)
+                return len(data)
         try:
             used_len = TransactionManager.callback_data(self, data, addr)
         except ModbusIOException as exc:
@@ -48,6 +53,7 @@ class LoggingServerRequestHandler(ServerRequestHandler):
 
 class _LoggingModbusServerMixin:
     _on_invalid: Callable[[bytes, str], None] | None = None
+    _is_tcp: bool = False
 
     def callback_new_connection(self):
         return LoggingServerRequestHandler(
@@ -56,16 +62,19 @@ class _LoggingModbusServerMixin:
             self.trace_pdu,
             self.trace_connect,
             self._on_invalid,
+            is_tcp=self._is_tcp,
         )
 
 
 class LoggingModbusTcpServer(_LoggingModbusServerMixin, ModbusTcpServer):
     def __init__(self, *args, on_invalid: Callable[[bytes, str], None] | None = None, **kwargs) -> None:
         self._on_invalid = on_invalid
+        self._is_tcp = True
         super().__init__(*args, **kwargs)
 
 
 class LoggingModbusSerialServer(_LoggingModbusServerMixin, ModbusSerialServer):
     def __init__(self, *args, on_invalid: Callable[[bytes, str], None] | None = None, **kwargs) -> None:
         self._on_invalid = on_invalid
+        self._is_tcp = False
         super().__init__(*args, **kwargs)

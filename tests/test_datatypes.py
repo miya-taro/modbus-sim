@@ -101,6 +101,60 @@ class TestCoil:
         assert decode_value(point) is True
         assert format_decoded_display(point) == "0x01"
 
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("address", [0, 15, 16, 20, 100, 1000])
+    async def test_tcp_coil_read_reflects_initial_value_at_any_address(
+        self, address: int
+    ) -> None:
+        """先頭 Coil のアドレスが 16 以上でも、サーバ起動直後の値が正しく反映されること。
+
+        コイル用の内部レジスタブロックはアドレスに応じたオフセットを持つため、
+        そのオフセットを無視すると先頭 Coil が addr>=16 の場合に値が化けていた。
+        """
+        from pymodbus.client import AsyncModbusTcpClient
+
+        reg = SlaveRegistry()
+        reg.get_slave(1).upsert_point(
+            RegisterPoint(address=address, kind=RegisterKind.COIL, datatype=ValueKind.BOOL, raw=1)
+        )
+        mgr = ModbusServerManager(slave_registry=reg)
+        port = 15100 + address % 1000
+        await mgr.start_tcp(TcpConfig(host="127.0.0.1", port=port))
+        try:
+            client = AsyncModbusTcpClient("127.0.0.1", port=port)
+            assert await client.connect()
+            result = await client.read_coils(address, count=1, device_id=1)
+            assert not result.isError(), result
+            assert result.bits[0] is True
+            client.close()
+        finally:
+            await mgr.stop_tcp()
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("address", [0, 16, 20, 100, 1000])
+    async def test_tcp_coil_write_persists_at_any_address(self, address: int) -> None:
+        """先頭 Coil のアドレスが 16 以上でも write_coil の結果が読み戻せること。"""
+        from pymodbus.client import AsyncModbusTcpClient
+
+        reg = SlaveRegistry()
+        reg.get_slave(1).upsert_point(
+            RegisterPoint(address=address, kind=RegisterKind.COIL, datatype=ValueKind.BOOL, raw=0)
+        )
+        mgr = ModbusServerManager(slave_registry=reg)
+        port = 15200 + address % 1000
+        await mgr.start_tcp(TcpConfig(host="127.0.0.1", port=port))
+        try:
+            client = AsyncModbusTcpClient("127.0.0.1", port=port)
+            assert await client.connect()
+            wr = await client.write_coil(address, True, device_id=1)
+            assert not wr.isError(), wr
+            result = await client.read_coils(address, count=1, device_id=1)
+            assert not result.isError(), result
+            assert result.bits[0] is True
+            client.close()
+        finally:
+            await mgr.stop_tcp()
+
 
 @pytest.mark.asyncio
 async def test_tcp_read_uint16() -> None:
