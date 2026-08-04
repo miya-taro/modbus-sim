@@ -3,15 +3,17 @@
 from __future__ import annotations
 
 from collections.abc import Callable
+from pathlib import Path
 
-from PySide6.QtCore import QEvent, Qt
-from PySide6.QtGui import QBrush, QColor, QKeySequence
+from PySide6.QtCore import QTimer, Qt
+from PySide6.QtGui import QBrush, QColor, QKeySequence, QShortcut
 from PySide6.QtWidgets import (
     QAbstractItemView,
     QApplication,
     QComboBox,
     QDialog,
     QDialogButtonBox,
+    QFileDialog,
     QFormLayout,
     QGroupBox,
     QHBoxLayout,
@@ -23,6 +25,8 @@ from PySide6.QtWidgets import (
     QMessageBox,
     QPushButton,
     QSpinBox,
+    QStyledItemDelegate,
+    QTabWidget,
     QTableWidget,
     QTableWidgetItem,
     QVBoxLayout,
@@ -39,10 +43,9 @@ from modbus_sim.datastore import (
 )
 from modbus_sim.models import RegisterPoint
 
-GRID_COLUMNS = ("Addr", "Kind", "Raw", "Decoded", "Datatype", "Tag")
-GRID_FIELDS = ("addr", "kind", "raw", "decoded", "datatype", "tag")
+GRID_COLUMNS = ("Addr", "Raw", "Decoded", "Datatype", "Tag")
+GRID_FIELDS = ("addr", "raw", "decoded", "datatype", "tag")
 ADDR_COL = GRID_FIELDS.index("addr")
-KIND_COL = GRID_FIELDS.index("kind")
 RAW_COL = GRID_FIELDS.index("raw")
 DECODED_COL = GRID_FIELDS.index("decoded")
 DATATYPE_COL = GRID_FIELDS.index("datatype")
@@ -70,6 +73,54 @@ def _datatype_choices_for(kind: RegisterKind) -> tuple[ValueKind, ...]:
     if kind in (RegisterKind.COIL, RegisterKind.DISCRETE_INPUT):
         return BIT_DATATYPE_CHOICES
     return DATATYPE_CHOICES
+
+
+def _default_datatype_for(kind: RegisterKind) -> ValueKind:
+    return _datatype_choices_for(kind)[0]
+
+
+class _DatatypeDelegate(QStyledItemDelegate):
+    """Datatype 列専用。常時コンボを置かず、編集時だけコンボを出す（軽量・矢印キー可）。"""
+
+    def __init__(self, panel: "SlavePanel") -> None:
+        super().__init__(panel)
+        self._panel = panel
+
+    def createEditor(self, parent, option, index):  # noqa: N802
+        if not self._panel._grid_enabled:
+            return None
+        row = index.row()
+        point = self._panel._row_meta[row] if row < len(self._panel._row_meta) else None
+        kind = point.kind if point is not None else self._panel.active_kind
+        choices = _datatype_choices_for(kind)
+        if len(choices) <= 1:
+            return None
+        combo = QComboBox(parent)
+        for datatype in choices:
+            combo.addItem(datatype.value, datatype)
+        # 選択確定ですぐ閉じる（ドロップダウン中の都度コミットはしない）
+        combo.activated.connect(lambda _i, editor=combo: self._commit_and_close(editor))
+        # 編集開始と同時に候補を開き、体感遅延を減らす
+        QTimer.singleShot(0, combo.showPopup)
+        return combo
+
+    def _commit_and_close(self, editor: QComboBox) -> None:
+        self.commitData.emit(editor)
+        self.closeEditor.emit(editor, QStyledItemDelegate.EndEditHint.NoHint)
+
+    def setEditorData(self, editor, index) -> None:  # noqa: N802
+        if not isinstance(editor, QComboBox):
+            return
+        text = str(index.data(Qt.ItemDataRole.DisplayRole) or "")
+        found = editor.findText(text)
+        editor.setCurrentIndex(max(found, 0))
+
+    def setModelData(self, editor, model, index) -> None:  # noqa: N802
+        if isinstance(editor, QComboBox):
+            model.setData(index, editor.currentText(), Qt.ItemDataRole.EditRole)
+
+    def updateEditorGeometry(self, editor, option, index) -> None:  # noqa: N802
+        editor.setGeometry(option.rect)
 
 _ACTIVITY_COLORS = {
     "active": "green",
@@ -110,9 +161,15 @@ def _parse_datatype(text: str, kind: RegisterKind) -> ValueKind:
 
 
 class RangeAddDialog(QDialog):
-    def __init__(self, parent: QWidget | None = None) -> None:
+    def __init__(
+        self,
+        parent: QWidget | None = None,
+        *,
+        default_kind: RegisterKind = RegisterKind.HOLDING_REGISTER,
+    ) -> None:
         super().__init__(parent)
         self.setWindowTitle("範囲追加")
+        self._kind = default_kind
 
         self.start_address = QSpinBox()
         self.start_address.setRange(0, REGISTER_COUNT - 1)
@@ -121,13 +178,10 @@ class RangeAddDialog(QDialog):
         self.count_field.setRange(1, 2000)
         self.count_field.setValue(1)
 
-        self.kind_combo = QComboBox()
-        for kind in KIND_CHOICES:
-            self.kind_combo.addItem(_KIND_LABELS[kind], kind)
-        self.kind_combo.currentIndexChanged.connect(self._refresh_datatype_choices)
-
         self.datatype_combo = QComboBox()
-        self._refresh_datatype_choices()
+        for datatype in _datatype_choices_for(default_kind):
+            self.datatype_combo.addItem(datatype.value, datatype)
+        self.datatype_combo.setEnabled(len(_datatype_choices_for(default_kind)) > 1)
 
         self.raw_field = QLineEdit("0")
         self.raw_field.setToolTip("すべての行に設定する初期値（10進）")
@@ -136,9 +190,9 @@ class RangeAddDialog(QDialog):
         self.tag_prefix_field.setPlaceholderText("空欄可（例: Sensor → Sensor0, Sensor1, ...）")
 
         form = QFormLayout()
+        form.addRow("Kind", QLabel(_KIND_LABELS[default_kind]))
         form.addRow("開始アドレス", self.start_address)
         form.addRow("件数", self.count_field)
-        form.addRow("Kind", self.kind_combo)
         form.addRow("Datatype", self.datatype_combo)
         form.addRow("初期値 (10進)", self.raw_field)
         form.addRow("タグ接頭辞", self.tag_prefix_field)
@@ -154,17 +208,7 @@ class RangeAddDialog(QDialog):
         layout.addWidget(QLabel("int32 はアドレスを2つ消費するため、開始アドレスから2ずつ進みます。"))
         layout.addWidget(buttons)
 
-    def _refresh_datatype_choices(self, _index: int = 0) -> None:
-        raw = self.kind_combo.currentData()
-        kind = RegisterKind(raw) if raw is not None else RegisterKind.HOLDING_REGISTER
-        choices = _datatype_choices_for(kind)
-        self.datatype_combo.clear()
-        for datatype in choices:
-            self.datatype_combo.addItem(datatype.value, datatype)
-        self.datatype_combo.setEnabled(len(choices) > 1)
-
     def values(self) -> tuple[int, int, RegisterKind, ValueKind, int, str]:
-        kind = RegisterKind(self.kind_combo.currentData())
         datatype = ValueKind(self.datatype_combo.currentData())
         try:
             raw = int(self.raw_field.text().strip() or "0")
@@ -173,7 +217,7 @@ class RangeAddDialog(QDialog):
         return (
             self.start_address.value(),
             self.count_field.value(),
-            kind,
+            self._kind,
             datatype,
             raw,
             self.tag_prefix_field.text().strip(),
@@ -193,6 +237,7 @@ class SlavePanel(QWidget):
         self._on_change = on_change
         self._grid_enabled = True
         self._server_running = False
+        self._active_kind = RegisterKind.HOLDING_REGISTER
         self._draft: RegisterPoint | None = None
         self._row_meta: list[RegisterPoint | None] = []
         self._updating_table = False
@@ -223,14 +268,20 @@ class SlavePanel(QWidget):
         self.remove_slave_button.setToolTip("選択中の Slave を削除（Delete キーでも可）")
         self.remove_slave_button.clicked.connect(self._remove_slave)
 
+        self.kind_tabs = QTabWidget()
+        self.kind_tabs.setDocumentMode(True)
+        for kind in KIND_CHOICES:
+            self.kind_tabs.addTab(QWidget(), _KIND_LABELS[kind])
+        self.kind_tabs.currentChanged.connect(self._on_kind_tab_changed)
+
         self.table = QTableWidget(0, len(GRID_COLUMNS))
         self.table.setHorizontalHeaderLabels(list(GRID_COLUMNS))
         self.table.horizontalHeader().setStretchLastSection(True)
+        self.table.setItemDelegateForColumn(DATATYPE_COL, _DatatypeDelegate(self))
         self.table.cellChanged.connect(self._on_cell_changed)
         self.table.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
         self.table.customContextMenuRequested.connect(self._show_table_context_menu)
-        self.table.installEventFilter(self)
-        self.slave_list.installEventFilter(self)
+        self._install_shortcuts()
 
         self._status = QLabel("")
         self._status.setStyleSheet("color: #b00020;")
@@ -255,22 +306,32 @@ class SlavePanel(QWidget):
         self.register_search_field.textChanged.connect(self._apply_register_filter)
 
         self.range_add_button = QPushButton("範囲追加...")
-        self.range_add_button.setToolTip("連続したアドレスをまとめて追加します")
+        self.range_add_button.setToolTip("現在の Kind タブ向けに、連続アドレスをまとめて追加します")
         self.range_add_button.clicked.connect(self._open_range_add_dialog)
+
+        self.import_map_button = QPushButton("CSV/TSV取込...")
+        self.import_map_button.setToolTip(
+            "レジスタマップ（Addr/Kind/Datatype/Raw/Tag）を CSV/TSV から取り込みます"
+        )
+        self.import_map_button.clicked.connect(self._import_register_map_file)
 
         register_toolbar = QHBoxLayout()
         register_toolbar.addWidget(self.register_search_field, stretch=1)
         register_toolbar.addWidget(self.range_add_button)
+        register_toolbar.addWidget(self.import_map_button)
 
         right = QVBoxLayout()
         right.addWidget(
             QLabel(
-                "Raw = 10進 / Decoded = 16進（0x あり・なし可）。セル編集後に確定されます。\n"
-                "Kind: Coil / Discrete Input は 1bit（Datatype は bool 固定）、"
-                "Holding / Input Register は 16bit（uint16 / int16 / int32）です。\n"
-                "行を選択して Delete キーで削除、右クリックでコピー/複製/貼り付けができます。"
+                "Kind は上のタブで切り替えます（表に Kind 列はありません）。"
+                "キーボードで Addr → Raw → Decoded → Datatype → Tag を移動できます。\n"
+                "Datatype はセルで Enter / ダブルクリックすると候補が出ます（通常時はテキストなので軽く動きます）。"
+                "Coil / Discrete Input の Datatype は bool 固定、"
+                "Holding / Input Register は uint16 / int16 / int32 です。\n"
+                "範囲追加・CSV/TSV取込・コピー/貼り付けで一括設定できます。"
             )
         )
+        right.addWidget(self.kind_tabs)
         right.addLayout(register_toolbar)
         right.addWidget(self.table, stretch=1)
 
@@ -291,6 +352,37 @@ class SlavePanel(QWidget):
 
     def set_server_running(self, running: bool) -> None:
         self._server_running = running
+
+    @property
+    def active_kind(self) -> RegisterKind:
+        return self._active_kind
+
+    def set_active_kind(self, kind: RegisterKind) -> None:
+        index = KIND_CHOICES.index(kind)
+        if self.kind_tabs.currentIndex() != index:
+            self.kind_tabs.setCurrentIndex(index)
+        else:
+            self._apply_active_kind(kind)
+
+    def _on_kind_tab_changed(self, index: int) -> None:
+        if 0 <= index < len(KIND_CHOICES):
+            self._apply_active_kind(KIND_CHOICES[index])
+
+    def _apply_active_kind(self, kind: RegisterKind) -> None:
+        if self._active_kind == kind and self._draft is None:
+            self._rebuild_table()
+            return
+        self._active_kind = kind
+        if self._draft is not None and self._draft.kind != kind:
+            self._draft = None
+        self._rebuild_table()
+
+    def _new_draft_point(self) -> RegisterPoint:
+        return RegisterPoint(
+            address=-1,
+            kind=self._active_kind,
+            datatype=_default_datatype_for(self._active_kind),
+        )
 
     def refresh_activity(self, any_server_running: bool) -> None:
         for slave_id, dot in self._activity_dots.items():
@@ -360,63 +452,53 @@ class SlavePanel(QWidget):
         layout.addWidget(text, stretch=1)
         return row, dot
 
-    def _make_kind_combo(self, row_index: int, current: RegisterKind) -> QComboBox:
-        combo = QComboBox()
-        for kind in KIND_CHOICES:
-            combo.addItem(_KIND_LABELS[kind], kind)
-        index = combo.findData(current)
-        combo.setCurrentIndex(max(index, 0))
-        combo.setEnabled(self._grid_enabled)
-        combo.currentIndexChanged.connect(
-            lambda _idx, r=row_index: self._on_kind_changed(r)
-        )
-        return combo
-
-    def _make_datatype_combo(self, row_index: int, current: ValueKind, kind: RegisterKind) -> QComboBox:
-        choices = _datatype_choices_for(kind)
-        combo = QComboBox()
-        for datatype in choices:
-            combo.addItem(datatype.value, datatype)
-        index = combo.findData(current if current in choices else choices[0])
-        combo.setCurrentIndex(max(index, 0))
-        combo.setEnabled(self._grid_enabled and len(choices) > 1)
-        combo.currentIndexChanged.connect(
-            lambda _idx, r=row_index: self._on_datatype_changed(r)
-        )
-        return combo
+    def _close_active_editor(self) -> None:
+        """表再構築前に開いているエディタを閉じ、Qt の警告/編集不能を防ぐ。"""
+        if self.table.state() != QAbstractItemView.State.EditingState:
+            return
+        current = self.table.currentItem()
+        if current is not None:
+            self.table.closePersistentEditor(current)
+        focus = QApplication.focusWidget()
+        if focus is not None and (focus is self.table or self.table.isAncestorOf(focus)):
+            self.table.setFocus(Qt.FocusReason.OtherFocusReason)
 
     def _rebuild_table(self) -> None:
+        self._close_active_editor()
         slave = self._registry.get_slave(self._registry.selected_slave_id)
-        points = slave.list_points()
+        points = [p for p in slave.list_points() if p.kind == self._active_kind]
+        draft = self._draft if self._draft is not None and self._draft.kind == self._active_kind else None
         self._row_meta = [*points, None]
         self._updating_table = True
-        self.table.setRowCount(len(self._row_meta))
-        for row_index, point in enumerate(self._row_meta):
-            source = point or self._draft or RegisterPoint(
-                address=-1,
-                kind=RegisterKind.HOLDING_REGISTER,
-                datatype=ValueKind.UINT16,
-            )
-            addr_value = "" if source.address < 0 else str(source.address)
-            raw_value = "" if source.address < 0 and point is None and not self._draft else str(source.raw)
-            decoded_value = "" if source.address < 0 else format_decoded_display(source)
-            values = [addr_value, None, raw_value, decoded_value, None, source.tag]
-            for col, text in enumerate(values):
-                if col == KIND_COL:
-                    self.table.setCellWidget(
-                        row_index, col, self._make_kind_combo(row_index, source.kind)
-                    )
-                    continue
-                if col == DATATYPE_COL:
-                    self.table.setCellWidget(
-                        row_index, col, self._make_datatype_combo(row_index, source.datatype, source.kind)
-                    )
-                    continue
-                item = QTableWidgetItem(text or "")
-                if not self._grid_enabled:
-                    item.setFlags(item.flags() & ~Qt.ItemFlag.ItemIsEditable)
-                self.table.setItem(row_index, col, item)
-        self._updating_table = False
+        self.table.setUpdatesEnabled(False)
+        try:
+            self.table.clearContents()
+            self.table.setRowCount(len(self._row_meta))
+            for row_index, point in enumerate(self._row_meta):
+                source = point or draft or self._new_draft_point()
+                addr_value = "" if source.address < 0 else str(source.address)
+                raw_value = (
+                    "" if source.address < 0 and point is None and draft is None else str(source.raw)
+                )
+                decoded_value = "" if source.address < 0 else format_decoded_display(source)
+                datatype_editable = (
+                    self._grid_enabled and len(_datatype_choices_for(source.kind)) > 1
+                )
+                values = [
+                    addr_value,
+                    raw_value,
+                    decoded_value,
+                    source.datatype.value,
+                    source.tag,
+                ]
+                for col, text_value in enumerate(values):
+                    item = QTableWidgetItem(text_value or "")
+                    if not self._grid_enabled or (col == DATATYPE_COL and not datatype_editable):
+                        item.setFlags(item.flags() & ~Qt.ItemFlag.ItemIsEditable)
+                    self.table.setItem(row_index, col, item)
+        finally:
+            self.table.setUpdatesEnabled(True)
+            self._updating_table = False
         self._apply_register_filter()
 
     def _apply_register_filter(self, _text: str = "") -> None:
@@ -443,51 +525,8 @@ class SlavePanel(QWidget):
         if self._on_change:
             self._on_change()
 
-    def _on_kind_changed(self, row: int) -> None:
-        if self._updating_table or not self._grid_enabled:
-            return
-        combo = self.table.cellWidget(row, KIND_COL)
-        if not isinstance(combo, QComboBox):
-            return
-        raw = combo.currentData()
-        # PySide6 は str 派生 Enum を QVariant 経由で素の str に変換して返すため、
-        # isinstance(..., RegisterKind) では常に False になる。値から作り直す。
-        if raw is None:
-            return
-        kind = RegisterKind(raw)
-        point = self._row_meta[row] if row < len(self._row_meta) else None
-        self._commit_cell(
-            self._registry.selected_slave_id,
-            point,
-            "kind",
-            kind.value,
-            row_index=row,
-        )
-
-    def _on_datatype_changed(self, row: int) -> None:
-        if self._updating_table or not self._grid_enabled:
-            return
-        combo = self.table.cellWidget(row, DATATYPE_COL)
-        if not isinstance(combo, QComboBox):
-            return
-        raw = combo.currentData()
-        # 同上: PySide6 が Enum を素の str として返すため値から作り直す。
-        if raw is None:
-            return
-        datatype = ValueKind(raw)
-        point = self._row_meta[row] if row < len(self._row_meta) else None
-        self._commit_cell(
-            self._registry.selected_slave_id,
-            point,
-            "datatype",
-            datatype.value,
-            row_index=row,
-        )
-
     def _on_cell_changed(self, row: int, col: int) -> None:
         if self._updating_table or not self._grid_enabled:
-            return
-        if col in (KIND_COL, DATATYPE_COL):
             return
         item = self.table.item(row, col)
         if item is None:
@@ -512,18 +551,17 @@ class SlavePanel(QWidget):
     ) -> bool:
         col = GRID_FIELDS.index(field) if field in GRID_FIELDS else None
         try:
-            current = point or self._draft or RegisterPoint(
-                address=-1,
-                kind=RegisterKind.HOLDING_REGISTER,
-                datatype=ValueKind.UINT16,
-            )
+            current = point or self._draft or self._new_draft_point()
             updated = RegisterPoint(
                 address=current.address,
-                kind=current.kind,
+                kind=current.kind if point is not None else self._active_kind,
                 datatype=current.datatype,
                 tag=current.tag,
                 raw=current.raw,
             )
+            if point is None and updated.kind != self._active_kind:
+                updated.kind = self._active_kind
+                updated.datatype = _default_datatype_for(self._active_kind)
             if field == "addr":
                 if not value.strip():
                     return False
@@ -536,14 +574,6 @@ class SlavePanel(QWidget):
                 if not value.strip() and updated.address < 0:
                     return False
                 updated.raw = parse_decoded_input(value, updated.datatype)
-            elif field == "kind":
-                if not value.strip():
-                    return False
-                updated.kind = RegisterKind(value.strip())
-                if updated.kind in (RegisterKind.COIL, RegisterKind.DISCRETE_INPUT):
-                    updated.datatype = ValueKind.BOOL
-                elif updated.datatype == ValueKind.BOOL:
-                    updated.datatype = ValueKind.UINT16
             elif field == "datatype":
                 if not value.strip():
                     return False
@@ -579,7 +609,7 @@ class SlavePanel(QWidget):
             self._draft = None
             self._status.setText("")
 
-            if structural or field in ("kind", "datatype"):
+            if structural:
                 self._rebuild_table()
             elif row_index is not None:
                 self._row_meta[row_index] = updated
@@ -596,16 +626,6 @@ class SlavePanel(QWidget):
             return False
 
     def _mark_cell_error(self, row_index: int, col: int, message: str | None) -> None:
-        if col in (KIND_COL, DATATYPE_COL):
-            widget = self.table.cellWidget(row_index, col)
-            if isinstance(widget, QComboBox):
-                if message:
-                    widget.setStyleSheet("border: 1px solid #b00020; background-color: #fdecea;")
-                    widget.setToolTip(message)
-                else:
-                    widget.setStyleSheet("")
-                    widget.setToolTip("")
-            return
         item = self.table.item(row_index, col)
         if item is None:
             return
@@ -625,24 +645,14 @@ class SlavePanel(QWidget):
             updates[RAW_COL] = str(point.raw)
         if edited_field != "decoded":
             updates[DECODED_COL] = format_decoded_display(point)
+        if edited_field != "datatype":
+            updates[DATATYPE_COL] = point.datatype.value
         if edited_field != "tag":
             updates[TAG_COL] = point.tag
         for col_index, text in updates.items():
             item = self.table.item(row_index, col_index)
             if item is not None:
                 item.setText(text)
-        if edited_field != "kind":
-            combo = self.table.cellWidget(row_index, KIND_COL)
-            if isinstance(combo, QComboBox):
-                index = combo.findData(point.kind)
-                if index >= 0:
-                    combo.setCurrentIndex(index)
-        if edited_field != "datatype":
-            combo = self.table.cellWidget(row_index, DATATYPE_COL)
-            if isinstance(combo, QComboBox):
-                index = combo.findData(point.datatype)
-                if index >= 0:
-                    combo.setCurrentIndex(index)
         self._updating_table = False
 
     def _save_slave_tag(self, text: str) -> None:
@@ -832,9 +842,31 @@ class SlavePanel(QWidget):
         text = QApplication.clipboard().text()
         if not text.strip():
             return
+        self._import_register_map_text(text, action_label="貼り付け")
+
+    def _import_register_map_file(self) -> None:
+        if not self._grid_enabled:
+            return
+        path, _ = QFileDialog.getOpenFileName(
+            self,
+            "レジスタマップを取り込み",
+            "",
+            "CSV/TSV (*.csv *.tsv *.txt);;すべてのファイル (*)",
+        )
+        if not path:
+            return
+        try:
+            text = Path(path).read_text(encoding="utf-8-sig")
+        except OSError as exc:
+            QMessageBox.warning(self, "エラー", f"ファイルを読めませんでした: {exc}")
+            return
+        self._import_register_map_text(text, action_label="取込")
+
+    def _import_register_map_text(self, text: str, *, action_label: str) -> None:
         slave = self._registry.get_slave(self._registry.selected_slave_id)
         added = 0
         errors: list[str] = []
+        first_kind: RegisterKind | None = None
         for line_no, raw_line in enumerate(text.splitlines(), start=1):
             line = raw_line.strip()
             if not line:
@@ -842,15 +874,22 @@ class SlavePanel(QWidget):
             parts = [p.strip() for p in (line.split("\t") if "\t" in line else line.split(","))]
             if parts[0].lower() == "addr":
                 continue
-            if len(parts) < 4:
-                errors.append(f"{line_no}行目: 列数が不足しています（Addr/Kind/Datatype/Raw が必要）")
-                continue
             try:
                 address = int(parts[0])
-                kind = _parse_kind(parts[1])
-                datatype = _parse_datatype(parts[2], kind)
-                raw = int(parts[3])
-                tag = parts[4] if len(parts) > 4 else ""
+                if len(parts) >= 4:
+                    # Addr, Kind, Datatype, Raw[, Tag]
+                    kind = _parse_kind(parts[1])
+                    datatype = _parse_datatype(parts[2], kind)
+                    raw = int(parts[3])
+                    tag = parts[4] if len(parts) > 4 else ""
+                elif len(parts) >= 2:
+                    # Addr, Raw[, Tag] — 現在の Kind タブに投入
+                    kind = self._active_kind
+                    datatype = _default_datatype_for(kind)
+                    raw = int(parts[1])
+                    tag = parts[2] if len(parts) > 2 else ""
+                else:
+                    raise ValueError("列数が不足しています（Addr/Kind/Datatype/Raw または Addr/Raw）")
                 validate_address(address, datatype)
             except ValueError as exc:
                 errors.append(f"{line_no}行目: {exc}")
@@ -858,26 +897,31 @@ class SlavePanel(QWidget):
             slave.upsert_point(
                 RegisterPoint(address=address, kind=kind, datatype=datatype, tag=tag, raw=raw)
             )
+            if first_kind is None:
+                first_kind = kind
             added += 1
         self._draft = None
-        self._rebuild_table()
+        if first_kind is not None and first_kind != self._active_kind:
+            self.set_active_kind(first_kind)
+        else:
+            self._rebuild_table()
         if added and self._on_change:
             self._on_change()
         if errors:
             QMessageBox.warning(
                 self,
                 "一部失敗しました",
-                f"{added} 件貼り付けました。\n以下は失敗しました:\n" + "\n".join(errors[:20]),
+                f"{added} 件{action_label}しました。\n以下は失敗しました:\n" + "\n".join(errors[:20]),
             )
         elif added:
-            self._status.setText(f"{added} 件貼り付けました。")
+            self._status.setText(f"{added} 件{action_label}しました。")
         else:
-            self._status.setText("貼り付けられる行がありませんでした。")
+            self._status.setText(f"{action_label}できる行がありませんでした。")
 
     def _open_range_add_dialog(self) -> None:
         if not self._grid_enabled:
             return
-        dialog = RangeAddDialog(self)
+        dialog = RangeAddDialog(self, default_kind=self._active_kind)
         if dialog.exec() != QDialog.DialogCode.Accepted:
             return
         try:
@@ -914,26 +958,36 @@ class SlavePanel(QWidget):
         elif added:
             self._status.setText(f"{added} 件追加しました。")
 
-    def eventFilter(self, obj, event):  # noqa: N802
-        if obj is self.table and event.type() == QEvent.Type.KeyPress:
-            if event.matches(QKeySequence.StandardKey.Copy):
-                rows = self._selected_data_rows()
-                if rows:
-                    self._copy_rows(rows)
-                    return True
-            if event.matches(QKeySequence.StandardKey.Paste):
-                self._paste_rows()
-                return True
-            if self._grid_enabled and event.key() in (Qt.Key.Key_Delete, Qt.Key.Key_Backspace):
-                rows = self._selected_data_rows()
-                if rows:
-                    self._delete_rows(rows)
-                    return True
-        elif (
-            obj is self.slave_list
-            and event.type() == QEvent.Type.KeyPress
-            and event.key() in (Qt.Key.Key_Delete, Qt.Key.Key_Backspace)
-        ):
-            self._remove_slave()
-            return True
-        return super().eventFilter(obj, event)
+    def _install_shortcuts(self) -> None:
+        # PySide6 + Python 3.14 では eventFilter オーバーライドが
+        # Wayland 上で再帰クラッシュすることがあるため、QShortcut を使う。
+        # Backspace はセル編集と衝突するため Delete のみにする。
+        context = Qt.ShortcutContext.WidgetWithChildrenShortcut
+
+        copy_sc = QShortcut(QKeySequence.StandardKey.Copy, self.table)
+        copy_sc.setContext(context)
+        copy_sc.activated.connect(self._shortcut_copy)
+
+        paste_sc = QShortcut(QKeySequence.StandardKey.Paste, self.table)
+        paste_sc.setContext(context)
+        paste_sc.activated.connect(self._paste_rows)
+
+        del_sc = QShortcut(QKeySequence(Qt.Key.Key_Delete), self.table)
+        del_sc.setContext(context)
+        del_sc.activated.connect(self._shortcut_delete_rows)
+
+        slave_del_sc = QShortcut(QKeySequence(Qt.Key.Key_Delete), self.slave_list)
+        slave_del_sc.setContext(context)
+        slave_del_sc.activated.connect(self._remove_slave)
+
+    def _shortcut_copy(self) -> None:
+        rows = self._selected_data_rows()
+        if rows:
+            self._copy_rows(rows)
+
+    def _shortcut_delete_rows(self) -> None:
+        if not self._grid_enabled:
+            return
+        rows = self._selected_data_rows()
+        if rows:
+            self._delete_rows(rows)

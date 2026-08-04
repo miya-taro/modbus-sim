@@ -7,7 +7,8 @@ Modbus 通信の開発・テスト向けに、**TCP / RTU スレーブを同時�
 - **TCP / RTU 同時待受**: 右上のボタンでそれぞれ独立に開始・停止
 - **経路別スレーブ**: 「TCP スレーブ」「RTU スレーブ」タブでデータを完全分離（同じ Slave ID でも中身は独立）
 - **複数 Slave ID**: 1〜247。機器名（タグ）付き。通信状態丸（緑=直近通信 / 灰=待受中未通信 / 薄灰=停止中）
-- **レジスタ編集**: Addr / Kind / Raw / Decoded / Datatype / Tag を表内で編集。Kind は `Coil` / `Discrete Input` / `Holding Register` / `Input Register` から選択。Datatype は Holding/Input Register のみ `uint16` / `int16` / `int32` のリスト選択（Coil/Discrete Input は `bool` 固定）
+- **レジスタ編集**: Kind ごとにタブ分割（Holding / Input / Coil / Discrete）。表には Addr / Raw / Decoded / Datatype / Tag のみ（キーボード操作しやすい）
+- **一括設定**: 範囲追加、コピー/貼り付け、CSV/TSV 取込、設定 JSON のインポート/エクスポート
 - **Raw / Decoded 連動**: Raw は10進、Decoded は16進（`0x` あり・なし両方可）。負数も16進往復可能
 - **アドレス**: 0〜65535（`int32` は 0〜65534）。設定済みアドレスのみサーバ側に構築するため、高アドレスでも起動は高速
 - **通信設定**: TCP（IPv4/IPv6）と RTU（ポート・ボーレート・パリティ・Data bits・Stop bits）を常時表示。待受中は該当側のみロック
@@ -40,7 +41,8 @@ GUI ウィンドウが開きます（ターミナルには起動メッセージ�
 ### WSL2
 
 - 起動時に Qt は可能な範囲で **xcb** を優先します
-- 日本語フォントが無い場合、ユーザー領域への取得を自動試行します（`sudo` 不要）
+- xcb 用ライブラリが無い場合、ユーザー領域への取得を自動試行します（`sudo` 不要）
+- 日本語フォントが無い場合も同様に自動試行します
 - ウィンドウが出ない・不安定な場合のみ:
 
 ```bash
@@ -70,16 +72,33 @@ python main.py
 
 ### Kind / Raw / Decoded / Datatype
 
+スレーブ画面上部のタブで Kind を切り替えます（表に Kind 列はありません）。
+
+| タブ | Datatype |
+|---|---|
+| Holding Register / Input Register | `uint16` / `int16` / `int32` |
+| Coil / Discrete Input | `bool` 固定 |
+
 | 列 | 意味 | 例 |
 |---|---|---|
-| **Kind** | `Coil` / `Discrete Input` / `Holding Register` / `Input Register` | コンボで選択 |
 | **Raw** | メモリ上の10進 | `4660` / `-1`（int16/int32）、`0`/`1`（Coil/Discrete Input） |
 | **Decoded** | 同じ値の16進表示 | `0x1234` / `0xFFFF`（-1 の int16） |
-| **Datatype** | `uint16` / `int16` / `int32`（Coil/Discrete Input は `bool` 固定） | コンボで選択 |
+| **Datatype** | 上記 | コンボまたは固定表示 |
 
 - Decoded は `0x1234` でも `1234` でも可（どちらも16進）
 - `int32` は指定アドレスと次アドレスの 2 レジスタ（big-endian）。Addr は **65534 以下**（Holding/Input Register のみ）
-- Coil / Discrete Input は 1 アドレス = 1bit。Kind を切り替えると Datatype は自動的に対応する値に揃う
+
+### 一括設定
+
+- **範囲追加...**: 現在の Kind タブ向けに連続アドレスを追加
+- **コピー / 貼り付け / 複製**: 右クリックまたはショートカット
+- **CSV/TSV取込...**: レジスタマップをファイルから取り込み
+  - 形式例: `Addr,Kind,Datatype,Raw,Tag` または現在タブ向けの `Addr,Raw,Tag`
+- **設定をインポート/エクスポート**: 通信設定＋全スレーブ構成の JSON（PDF の仕様書そのものは非対応）
+
+### 異常パケットのログ
+
+通信ログに `INVALID` 行が出ます（例: Modbus TCP の protocol id ≠ 0）。通常の例外応答は `TX` の exception として要約されます。
 
 ## デフォルト
 

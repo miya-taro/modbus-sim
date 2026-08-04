@@ -146,21 +146,26 @@ class SlaveDatastore:
     def sync_from_server(self) -> bool:
         changed = False
         for point in self.points.values():
-            if point.datatype == ValueKind.INT32 and point.kind in (
+            if point.kind in (RegisterKind.COIL, RegisterKind.DISCRETE_INPUT):
+                latest = int(bool(self.read_raw(point.kind, point.address)))
+            elif point.datatype == ValueKind.INT32 and point.kind in (
                 RegisterKind.HOLDING_REGISTER,
                 RegisterKind.INPUT_REGISTER,
             ):
                 memory = self._memory(point.kind)
-                hi = int(memory[point.address])
-                lo = int(memory[point.address + 1])
-                latest = struct.unpack(">i", struct.pack(">HH", hi, lo))[0]
-            elif point.kind in (RegisterKind.COIL, RegisterKind.DISCRETE_INPUT):
-                latest = int(bool(self.read_raw(point.kind, point.address)))
+                latest = raw_from_memory(
+                    point,
+                    hi=int(memory[point.address]),
+                    lo=int(memory[point.address + 1]),
+                )
             else:
-                latest = int(self.read_raw(point.kind, point.address))
-            if latest != point.raw:
-                point.raw = latest
-                changed = True
+                latest = raw_from_memory(
+                    point, hi=int(self.read_raw(point.kind, point.address))
+                )
+            if _raw_values_equal(point, latest):
+                continue
+            point.raw = latest
+            changed = True
         return changed
 
     def bind_runtime(self, runtime) -> None:
@@ -230,11 +235,11 @@ class SlaveDatastore:
             point = self.points[key]
             if point.datatype == ValueKind.INT32:
                 memory = self._memory(kind)
-                hi = int(memory[index])
-                lo = int(memory[index + 1])
-                point.raw = struct.unpack(">i", struct.pack(">HH", hi, lo))[0]
+                point.raw = raw_from_memory(
+                    point, hi=int(memory[index]), lo=int(memory[index + 1])
+                )
             else:
-                point.raw = int(self.read_raw(kind, index))
+                point.raw = raw_from_memory(point, hi=int(self.read_raw(kind, index)))
 
     def build_sim_device(self) -> SimDevice:
         return SimDevice(
@@ -421,6 +426,30 @@ def decode_value(point: RegisterPoint) -> str | int | bool:
     if point.datatype == ValueKind.INT32:
         return int(point.raw)
     return point.raw
+
+
+def raw_from_memory(point: RegisterPoint, *, hi: int | None = None, lo: int | None = None) -> int:
+    """メモリ上の符号なし値を、point.datatype に合わせた raw に変換する。"""
+    if point.kind in (RegisterKind.COIL, RegisterKind.DISCRETE_INPUT):
+        return int(bool(hi if hi is not None else 0))
+    if point.datatype == ValueKind.INT32:
+        assert hi is not None and lo is not None
+        return struct.unpack(">i", struct.pack(">HH", hi & 0xFFFF, lo & 0xFFFF))[0]
+    value = int(hi if hi is not None else 0) & 0xFFFF
+    if point.datatype == ValueKind.INT16:
+        return value - 0x10000 if value >= 0x8000 else value
+    return value
+
+
+def _raw_values_equal(point: RegisterPoint, latest: int) -> bool:
+    """UI raw とメモリ由来 raw が実質同じか（int16 の -1 と 0xFFFF を同一視）。"""
+    if point.datatype == ValueKind.INT16:
+        return (int(point.raw) & 0xFFFF) == (int(latest) & 0xFFFF)
+    if point.datatype == ValueKind.INT32:
+        return (int(point.raw) & 0xFFFFFFFF) == (int(latest) & 0xFFFFFFFF)
+    if point.kind in (RegisterKind.COIL, RegisterKind.DISCRETE_INPUT):
+        return bool(point.raw) == bool(latest)
+    return int(point.raw) == int(latest)
 
 
 def format_decoded_display(point: RegisterPoint) -> str:

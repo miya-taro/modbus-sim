@@ -56,6 +56,17 @@ class TestInt16:
         assert decode_value(point) == -1
         assert parse_decoded_input("0xFFFF", ValueKind.INT16) == 0xFFFF
 
+    def test_sync_from_server_does_not_false_positive_on_int16(self) -> None:
+        """int16 の -1 とメモリ 0xFFFF を別物と見ると UI が定期的に再描画されて遅くなる。"""
+        slave = SlaveDatastore(1)
+        point = _hr_point(5, ValueKind.INT16, -1)
+        slave.upsert_point(point)
+        assert slave.sync_from_server() is False
+        assert point.raw == -1
+
+        point.raw = 0xFFFF
+        assert slave.sync_from_server() is False
+
 
 class TestInt32:
     def test_two_register_storage(self) -> None:

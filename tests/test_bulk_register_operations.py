@@ -136,15 +136,14 @@ class TestRangeAddDialog:
     def test_range_add_creates_sequential_points(self, qapp: QApplication, monkeypatch) -> None:
         reg = SlaveRegistry()
         panel = SlavePanel(slave_registry=reg)
+        panel.set_active_kind(RegisterKind.INPUT_REGISTER)
 
         orig_init = RangeAddDialog.__init__
 
-        def fake_init(self, parent=None) -> None:
-            orig_init(self, parent)
+        def fake_init(self, parent=None, *, default_kind=RegisterKind.HOLDING_REGISTER) -> None:
+            orig_init(self, parent, default_kind=default_kind)
             self.start_address.setValue(100)
             self.count_field.setValue(3)
-            index = self.kind_combo.findData(RegisterKind.INPUT_REGISTER)
-            self.kind_combo.setCurrentIndex(index)
             self.raw_field.setText("7")
             self.tag_prefix_field.setText("S")
 
@@ -170,3 +169,16 @@ class TestRangeAddDialog:
         panel._open_range_add_dialog()
 
         assert reg.get_slave(1).list_points() == []
+
+    def test_import_simple_addr_raw_uses_active_kind(self, qapp: QApplication, tmp_path) -> None:
+        reg = SlaveRegistry()
+        panel = SlavePanel(slave_registry=reg)
+        panel.set_active_kind(RegisterKind.COIL)
+        path = tmp_path / "map.csv"
+        path.write_text("Addr,Raw,Tag\n7,1,flag\n", encoding="utf-8")
+        text = path.read_text(encoding="utf-8")
+        panel._import_register_map_text(text, action_label="取込")
+        point = reg.get_slave(1).get_point(7, RegisterKind.COIL)
+        assert point is not None
+        assert point.raw == 1
+        assert point.tag == "flag"

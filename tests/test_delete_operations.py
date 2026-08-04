@@ -167,3 +167,25 @@ class TestErrorCellFeedback:
         panel.table.item(row, ADDR_COL).setText("50")
         row = _row_for_address(panel, 50)
         assert panel.table.item(row, ADDR_COL).toolTip() == ""
+
+
+class TestKeyboardShortcuts:
+    def test_panel_has_no_event_filter_override(self, qapp: QApplication) -> None:
+        """eventFilter 再帰クラッシュ回避のため、ショートカット方式であること。"""
+        panel = SlavePanel(slave_registry=SlaveRegistry())
+        assert "eventFilter" not in type(panel).__dict__
+        assert hasattr(panel, "_shortcut_copy")
+        assert hasattr(panel, "_shortcut_delete_rows")
+
+    def test_shortcut_delete_removes_selected_row(
+        self, qapp: QApplication, monkeypatch
+    ) -> None:
+        monkeypatch.setattr(QMessageBox, "question", lambda *a, **k: QMessageBox.StandardButton.Yes)
+        reg = SlaveRegistry()
+        panel = SlavePanel(slave_registry=reg)
+        panel.table.item(panel.table.rowCount() - 1, ADDR_COL).setText("50")
+        row = _row_for_address(panel, 50)
+        panel.table.selectRow(row)
+
+        panel._shortcut_delete_rows()
+        assert reg.get_slave(1).get_point(50, RegisterKind.HOLDING_REGISTER) is None

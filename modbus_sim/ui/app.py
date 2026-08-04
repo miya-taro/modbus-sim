@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import asyncio
-import ctypes
 import json
 import os
 import sys
@@ -35,6 +34,7 @@ from modbus_sim.ui.async_runner import AsyncRunner
 from modbus_sim.ui.log_panel import LogPanel
 from modbus_sim.ui.settings_panel import SettingsPanel
 from modbus_sim.ui.slave_panel import SlavePanel
+from modbus_sim.xcb_util import ensure_xcb_libs, xcb_libs_available
 
 TAB_SETTINGS = 0
 TAB_TCP_SLAVE = 1
@@ -217,7 +217,22 @@ class MainWindow(QMainWindow):
     def _save_settings(self) -> None:
         tcp_registry.selected_slave_id = self.tcp_slave_panel._registry.selected_slave_id
         rtu_registry.selected_slave_id = self.rtu_slave_panel._registry.selected_slave_id
-        self._settings_store.save(self.settings_panel, tcp_registry, rtu_registry)
+        # UI スレッドを止めないよう、JSON 書き込みだけバックグラウンドへ
+        panel = self.settings_panel.to_dict()
+        payload = {
+            "tcp": panel.get("tcp", {}),
+            "rtu": panel.get("rtu", {}),
+            "tcp_slaves": tcp_registry.to_dict()["slaves"],
+            "tcp_selected_slave_id": tcp_registry.selected_slave_id,
+            "rtu_slaves": rtu_registry.to_dict()["slaves"],
+            "rtu_selected_slave_id": rtu_registry.selected_slave_id,
+        }
+        path = self._settings_store.path
+
+        async def _write() -> None:
+            await asyncio.to_thread(SettingsStore.write_payload, path, payload)
+
+        self._async.submit(_write())
 
     def _export_settings(self) -> None:
         self._save_settings()
@@ -348,32 +363,18 @@ def _is_wsl() -> bool:
     return is_wsl()
 
 
-def _xcb_libs_available() -> bool:
-    for name in (
-        "libxcb-cursor.so.0",
-        "libxcb-icccm.so.4",
-        "libxcb-keysyms.so.1",
-        "libxcb-shape.so.0",
-        "libxkbcommon-x11.so.0",
-    ):
-        try:
-            ctypes.CDLL(name)
-        except OSError:
-            return False
-    return True
-
-
 def _prepare_qt_platform() -> None:
-    """WSLg では Wayland より X11(xcb) の方がウィンドウが出やすい。"""
+    """WSLg では Wayland より X11(xcb) の方が安定しやすい。"""
     if os.environ.get("QT_QPA_PLATFORM"):
         return
     if not is_wsl():
         return
-    if _xcb_libs_available():
+    ensure_xcb_libs()
+    if xcb_libs_available():
         os.environ["QT_QPA_PLATFORM"] = "xcb"
+        # Wayland 優先を避ける（xcb を明示しても WAYLAND_DISPLAY があると揺れることがある）
         os.environ.pop("WAYLAND_DISPLAY", None)
         return
-    # xcb が使えなくても Wayland で起動を試みる（COPY MODE 警告が出ることがある）
     print(
         "注意: WSL でウィンドウが不安定な場合は次を実行してください:\n"
         "  sudo apt install -y libxcb-cursor0 libxcb-icccm4 libxcb-keysyms1 "
