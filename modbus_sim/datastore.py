@@ -79,49 +79,25 @@ class SlaveDatastore:
         if structural and self._owner is not None:
             self._owner.invalidate_sim_devices()
 
-    def _simdata_for_kind(self, kind: RegisterKind) -> list[SimData]:
-        points = sorted(
-            (p for p in self.points.values() if p.kind == kind),
-            key=lambda p: p.address,
-        )
-        if not points:
-            if kind in (RegisterKind.COIL, RegisterKind.DISCRETE_INPUT):
-                return [SimData(address=0, count=1, values=False, datatype=DataType.BITS)]
-            return [SimData(address=0, count=1, values=0, datatype=DataType.REGISTERS)]
+    def remove_point(self, address: int, kind: RegisterKind) -> bool:
+        point = self.points.pop((address, kind), None)
+        if point is None:
+            return False
+        self._write_raw(RegisterPoint(address=address, kind=kind, datatype=point.datatype, raw=0))
+        if self._owner is not None:
+            self._owner.invalidate_sim_devices()
+        return True
 
-        entries: list[SimData] = []
-        for point in points:
-            if kind in (RegisterKind.COIL, RegisterKind.DISCRETE_INPUT):
-                entries.append(
-                    SimData(
-                        address=point.address,
-                        count=1,
-                        values=bool(point.raw),
-                        datatype=DataType.BITS,
-                    )
-                )
-            elif point.datatype == ValueKind.INT32:
-                entries.append(
-                    SimData(
-                        address=point.address,
-                        count=1,
-                        values=int(point.raw),
-                        datatype=DataType.INT32,
-                    )
-                )
-            else:
-                value = int(point.raw)
-                if point.datatype in (ValueKind.UINT16, ValueKind.INT16):
-                    value &= 0xFFFF
-                entries.append(
-                    SimData(
-                        address=point.address,
-                        count=1,
-                        values=value,
-                        datatype=DataType.REGISTERS,
-                    )
-                )
-        return entries
+    def _simdata_for_kind(self, kind: RegisterKind) -> list[SimData]:
+        # レジスタ点だけを個別に渡すと、その時点で未定義のアドレスは
+        # サーバ側のブロック範囲外になり、サーバ起動中に新しい点を追加しても
+        # クライアントから読めない（ILLEGAL ADDRESS）ままになる。
+        # そのため常に REGISTER_COUNT 全域を 1 ブロックとして渡し、
+        # どのアドレスが後から追加されても既存ブロック内に収まるようにする。
+        memory = list(self._memory(kind))
+        if kind in (RegisterKind.COIL, RegisterKind.DISCRETE_INPUT):
+            return [SimData(address=0, count=1, values=memory, datatype=DataType.BITS)]
+        return [SimData(address=0, count=1, values=memory, datatype=DataType.REGISTERS)]
 
     def _memory(self, kind: RegisterKind) -> list[bool] | list[int]:
         if kind == RegisterKind.COIL:
@@ -148,7 +124,7 @@ class SlaveDatastore:
             for blocks in self._all_blocks():
                 block = blocks.get(block_key)
                 if block is not None:
-                    _sync_bits_to_registers(bits, block[2])
+                    _sync_bits_to_registers(bits, block[2], block[0])
             return
 
         if point.datatype == ValueKind.INT32:
@@ -202,7 +178,7 @@ class SlaveDatastore:
                 block = blocks.get(block_key)
                 if block is not None:
                     bits = self._coils if block_key == "c" else self._discrete_inputs
-                    _sync_bits_to_registers(bits, block[2])
+                    _sync_bits_to_registers(bits, block[2], block[0])
                 continue
             memory = self._memory(point.kind)
             _write_register_point_to_block(point, blocks.get(_block_key_for_kind(point.kind)), memory)
@@ -219,15 +195,14 @@ class SlaveDatastore:
             set_values: list[int] | list[bool] | None,
         ) -> None | ExcCodes:
             if function_code in (1, 5, 15):
-                _sync_bits_to_registers(slave._coils, current_registers)
+                _sync_bits_to_registers(slave._coils, current_registers, start_address)
                 if set_values is not None:
-                    offset = address - start_address
                     for index, value in enumerate(set_values):
-                        slave._coils[offset + index] = bool(value)
-                    _sync_bits_to_registers(slave._coils, current_registers)
-                    slave._sync_points_from_memory(RegisterKind.COIL, offset, len(set_values))
+                        slave._coils[address + index] = bool(value)
+                    _sync_bits_to_registers(slave._coils, current_registers, start_address)
+                    slave._sync_points_from_memory(RegisterKind.COIL, address, len(set_values))
             elif function_code == 2:
-                _sync_bits_to_registers(slave._discrete_inputs, current_registers)
+                _sync_bits_to_registers(slave._discrete_inputs, current_registers, start_address)
             elif function_code in (3, 6, 16, 22, 23):
                 for index in range(len(current_registers)):
                     addr = start_address + index
@@ -322,6 +297,18 @@ class SlaveRegistry:
         self._tags[slave_id] = ""
         self.invalidate_sim_devices()
 
+    def remove_slave(self, slave_id: int) -> None:
+        if slave_id not in self._slaves:
+            raise KeyError(f"Slave ID {slave_id} not found")
+        if len(self._slaves) <= 1:
+            raise ValueError("最後の Slave は削除できません")
+        del self._slaves[slave_id]
+        self._tags.pop(slave_id, None)
+        self._activity.pop(slave_id, None)
+        if self.selected_slave_id == slave_id:
+            self.selected_slave_id = self.list_slave_ids()[0]
+        self.invalidate_sim_devices()
+
     def build_sim_devices(self) -> list[SimDevice]:
         # TCP / RTU が同じ SimDevice インスタンスを共有しないよう、起動のたびに新規生成する
         return [slave.build_sim_device() for slave in self._slaves.values()]
@@ -412,12 +399,15 @@ def validate_address(address: int, datatype: ValueKind) -> None:
         raise ValueError(f"int32 は Addr が {REGISTER_COUNT - 2} 以下である必要があります")
 
 
-def _sync_bits_to_registers(bits: list[bool], registers: list[int]) -> None:
+def _sync_bits_to_registers(bits: list[bool], registers: list[int], block_start: int = 0) -> None:
+    # registers はブロック先頭 (block_start 番目の packed ワード) から始まる
+    # サーバ側の実配列なので、packed 側もそのオフセット分ずらして書き込む
     padded = bits + [False] * ((len(bits) + 15) // 16 * 16 - len(bits))
     packed = SimUtils.bitsToRegisters(padded)
-    for index, value in enumerate(packed):
-        if index < len(registers) - 1:
-            registers[index] = value
+    for index in range(len(registers) - 1):
+        source_index = block_start + index
+        if source_index < len(packed):
+            registers[index] = packed[source_index]
 
 
 def decode_value(point: RegisterPoint) -> str | int | bool:
@@ -455,6 +445,8 @@ def parse_decoded_input(value: str, datatype: ValueKind) -> int:
         # 0x なしも 16 進として受け付ける（例: 1234 → 0x1234）
         parsed = int(text, 16)
 
+    if datatype == ValueKind.BOOL:
+        return 1 if parsed else 0
     if datatype == ValueKind.UINT16:
         return parsed & 0xFFFF
     if datatype == ValueKind.INT16:

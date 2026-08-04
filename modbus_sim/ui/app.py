@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import ctypes
+import json
 import os
 import sys
 from pathlib import Path
@@ -12,9 +13,11 @@ from PySide6.QtCore import QObject, Qt, QTimer, Signal, Slot
 from PySide6.QtGui import QFont, QFontDatabase
 from PySide6.QtWidgets import (
     QApplication,
+    QFileDialog,
     QHBoxLayout,
     QLabel,
     QMainWindow,
+    QMessageBox,
     QPushButton,
     QTabWidget,
     QVBoxLayout,
@@ -23,6 +26,7 @@ from PySide6.QtWidgets import (
 
 from modbus_sim.config import TcpConfig
 from modbus_sim.datastore import rtu_registry, tcp_registry
+from modbus_sim.error_messages import friendly_server_error
 from modbus_sim.fonts_util import ensure_cjk_fonts
 from modbus_sim.platform_util import is_wsl
 from modbus_sim.server_manager import ModbusServerManager
@@ -51,6 +55,7 @@ async def _start_tcp_server(manager: ModbusServerManager, config: TcpConfig) -> 
 class ServerBridge(QObject):
     tcp_state_changed = Signal(bool)
     rtu_state_changed = Signal(bool)
+    tcp_client_count_changed = Signal(int)
     log_dirty = Signal()
     error = Signal(str)
 
@@ -65,6 +70,7 @@ class MainWindow(QMainWindow):
         self._bridge = ServerBridge()
         self._bridge.tcp_state_changed.connect(self._refresh_tcp_status)
         self._bridge.rtu_state_changed.connect(self._refresh_rtu_status)
+        self._bridge.tcp_client_count_changed.connect(self._refresh_tcp_client_count)
         self._bridge.log_dirty.connect(self._mark_log_dirty)
         self._bridge.error.connect(self._show_error)
 
@@ -75,7 +81,11 @@ class MainWindow(QMainWindow):
         self._tcp_busy = False
         self._rtu_busy = False
 
-        self.settings_panel = SettingsPanel(on_change=self._schedule_save)
+        self.settings_panel = SettingsPanel(
+            on_change=self._schedule_save,
+            on_export=self._export_settings,
+            on_import=self._import_settings,
+        )
         self.tcp_slave_panel = SlavePanel(
             slave_registry=tcp_registry,
             on_change=self._schedule_save,
@@ -94,6 +104,7 @@ class MainWindow(QMainWindow):
             on_log=lambda _msg: self._bridge.log_dirty.emit(),
             on_tcp_state_change=lambda running: self._bridge.tcp_state_changed.emit(running),
             on_rtu_state_change=lambda running: self._bridge.rtu_state_changed.emit(running),
+            on_tcp_client_count_change=lambda n: self._bridge.tcp_client_count_changed.emit(n),
         )
         self.log_panel._on_clear = lambda: self.server_manager.log_buffer.clear()
 
@@ -108,6 +119,8 @@ class MainWindow(QMainWindow):
 
         self.tcp_status = QLabel("●")
         self.tcp_status_text = QLabel("TCP 停止")
+        self.tcp_clients_label = QLabel("")
+        self.tcp_clients_label.setStyleSheet("color: #555;")
         self.tcp_button = QPushButton("TCP 開始")
         self.tcp_button.clicked.connect(self._toggle_tcp)
 
@@ -126,6 +139,7 @@ class MainWindow(QMainWindow):
         header.addStretch()
         header.addWidget(self.tcp_status)
         header.addWidget(self.tcp_status_text)
+        header.addWidget(self.tcp_clients_label)
         header.addWidget(self.tcp_button)
         header.addSpacing(16)
         header.addWidget(self.rtu_status)
@@ -159,6 +173,7 @@ class MainWindow(QMainWindow):
         self.rtu_slave_panel.set_grid_enabled(True)
         self.tcp_slave_panel.set_server_running(self.server_manager.tcp_running)
         self.rtu_slave_panel.set_server_running(self.server_manager.rtu_running)
+        self.settings_panel.set_import_enabled(not self.server_manager.any_running)
 
     @Slot(bool)
     def _refresh_tcp_status(self, running: bool) -> None:
@@ -169,7 +184,13 @@ class MainWindow(QMainWindow):
         self.tcp_status_text.setStyleSheet(f"color: {color};")
         self.tcp_button.setText("TCP 停止" if running else "TCP 開始")
         self.settings_panel.set_tcp_settings_enabled(not running)
+        if not running:
+            self.tcp_clients_label.setText("")
         self._update_grid_enabled()
+
+    @Slot(int)
+    def _refresh_tcp_client_count(self, count: int) -> None:
+        self.tcp_clients_label.setText(f"({count}台接続中)" if count > 0 else "")
 
     @Slot(bool)
     def _refresh_rtu_status(self, running: bool) -> None:
@@ -198,6 +219,43 @@ class MainWindow(QMainWindow):
         rtu_registry.selected_slave_id = self.rtu_slave_panel._registry.selected_slave_id
         self._settings_store.save(self.settings_panel, tcp_registry, rtu_registry)
 
+    def _export_settings(self) -> None:
+        self._save_settings()
+        default_name = str(Path.home() / "modbus_sim_settings.json")
+        path_str, _ = QFileDialog.getSaveFileName(
+            self, "設定をエクスポート", default_name, "JSON Files (*.json)"
+        )
+        if not path_str:
+            return
+        try:
+            SettingsStore(Path(path_str)).save(self.settings_panel, tcp_registry, rtu_registry)
+        except OSError as exc:
+            QMessageBox.warning(self, "エラー", f"エクスポートに失敗しました:\n{exc}")
+            return
+        QMessageBox.information(self, "完了", "設定をエクスポートしました。")
+
+    def _import_settings(self) -> None:
+        if self.server_manager.any_running:
+            QMessageBox.warning(self, "エラー", "サーバー停止中のみインポートできます。")
+            return
+        path_str, _ = QFileDialog.getOpenFileName(
+            self, "設定をインポート", str(Path.home()), "JSON Files (*.json);;All Files (*)"
+        )
+        if not path_str:
+            return
+        try:
+            SettingsStore(Path(path_str)).apply_from_path(
+                self.settings_panel, tcp_registry, rtu_registry
+            )
+        except (OSError, json.JSONDecodeError, ValueError) as exc:
+            QMessageBox.warning(self, "エラー", f"設定を読み込めませんでした:\n{exc}")
+            return
+        self.tcp_slave_panel._rebuild()
+        self.rtu_slave_panel._rebuild()
+        self.settings_panel.update_summary()
+        self._schedule_save()
+        QMessageBox.information(self, "完了", "設定をインポートしました。")
+
     def _on_tab_changed(self, index: int) -> None:
         if index in (TAB_TCP_SLAVE, TAB_RTU_SLAVE):
             self._save_settings()
@@ -213,7 +271,7 @@ class MainWindow(QMainWindow):
             try:
                 future.result()
             except Exception as exc:  # noqa: BLE001
-                self._bridge.error.emit(str(exc))
+                self._bridge.error.emit(friendly_server_error(exc))
             self._tcp_busy = False
             self.tcp_button.setEnabled(True)
             self._bridge.log_dirty.emit()
@@ -242,7 +300,7 @@ class MainWindow(QMainWindow):
             try:
                 future.result()
             except Exception as exc:  # noqa: BLE001
-                self._bridge.error.emit(str(exc))
+                self._bridge.error.emit(friendly_server_error(exc))
             self._rtu_busy = False
             self.rtu_button.setEnabled(True)
             self._bridge.log_dirty.emit()
@@ -271,7 +329,7 @@ class MainWindow(QMainWindow):
         logs = list(self.server_manager.log_buffer)
         if self._log_dirty or len(logs) != self._last_log_count:
             self._log_dirty = False
-            self.log_panel.set_lines(logs[-200:])
+            self.log_panel.set_lines(logs)
             self._last_log_count = len(logs)
 
     def closeEvent(self, event) -> None:  # noqa: N802

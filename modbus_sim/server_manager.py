@@ -33,6 +33,7 @@ class ModbusServerManager:
         on_log: Callable[[str], None] | None = None,
         on_tcp_state_change: Callable[[bool], None] | None = None,
         on_rtu_state_change: Callable[[bool], None] | None = None,
+        on_tcp_client_count_change: Callable[[int], None] | None = None,
     ) -> None:
         # slave_registry はテスト互換: 指定時は TCP/RTU 両方に同じレジストリを使う
         if slave_registry is not None:
@@ -51,7 +52,9 @@ class ModbusServerManager:
         self._on_log = on_log
         self._on_tcp_state_change = on_tcp_state_change
         self._on_rtu_state_change = on_rtu_state_change
-        self.log_buffer: deque[str] = deque(maxlen=500)
+        self._on_tcp_client_count_change = on_tcp_client_count_change
+        self.log_buffer: deque[str] = deque(maxlen=2000)
+        self.tcp_client_count = 0
 
     def _registry_for(self, mode: CommMode) -> SlaveRegistry:
         return self._tcp_registry if mode == CommMode.TCP else self._rtu_registry
@@ -113,13 +116,28 @@ class ModbusServerManager:
 
         return _on_invalid
 
+    def _emit_tcp_client_count(self) -> None:
+        if self._on_tcp_client_count_change:
+            self._on_tcp_client_count_change(self.tcp_client_count)
+
+    def _make_trace_connect(self):
+        def _trace_connect(connected: bool) -> None:
+            self.tcp_client_count += 1 if connected else -1
+            if self.tcp_client_count < 0:
+                self.tcp_client_count = 0
+            self._emit_tcp_client_count()
+
+        return _trace_connect
+
     async def start_tcp(self, config: TcpConfig) -> None:
         if self.tcp_running:
             raise RuntimeError("TCP server is already running")
+        self.tcp_client_count = 0
         self._tcp_server = LoggingModbusTcpServer(
             self._tcp_registry.build_sim_devices(),
             address=(config.host, config.port),
             trace_packet=self._make_trace_packet(CommMode.TCP),
+            trace_connect=self._make_trace_connect(),
             on_invalid=self._make_on_invalid(CommMode.TCP),
         )
         # background=True: listen 完了後に戻る（クライアント接続前に待受準備を完了させる）
@@ -170,6 +188,8 @@ class ModbusServerManager:
                 await task
             except asyncio.CancelledError:
                 pass
+        self.tcp_client_count = 0
+        self._emit_tcp_client_count()
         self._emit_tcp_state(False)
         self._emit_log(f"[{datetime.now():%Y-%m-%d %H:%M:%S}] TCP server stopped")
 

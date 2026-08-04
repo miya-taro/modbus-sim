@@ -158,6 +158,42 @@ def test_log_panel_set_lines_and_clear(qapp) -> None:
     assert cleared["done"] is True
 
 
+def test_log_panel_mode_filter(qapp) -> None:
+    panel = LogPanel()
+    lines = [
+        "[2026-08-04 10:00:00] TCP RX device=1 FC=03 addr=0 count=1 | 00",
+        "[2026-08-04 10:00:01] RTU RX device=2 FC=03 addr=0 count=1 | 01",
+    ]
+    panel.set_lines(lines)
+    panel.mode_filter.setCurrentText("TCP")
+    assert panel.log_field.toPlainText() == lines[0]
+    panel.mode_filter.setCurrentText("RTU")
+    assert panel.log_field.toPlainText() == lines[1]
+    panel.mode_filter.setCurrentText("すべて")
+    assert panel.log_field.toPlainText() == "\n".join(lines)
+
+
+def test_log_panel_search_filter(qapp) -> None:
+    panel = LogPanel()
+    lines = [
+        "[2026-08-04 10:00:00] TCP RX device=1 FC=03 addr=0 count=1 | 00",
+        "[2026-08-04 10:00:01] TCP RX device=2 FC=03 addr=0 count=1 | 01",
+    ]
+    panel.set_lines(lines)
+    panel.search_field.setText("device=2")
+    assert panel.log_field.toPlainText() == lines[1]
+
+
+def test_log_panel_pause_holds_display_until_resumed(qapp) -> None:
+    panel = LogPanel()
+    panel.set_lines(["a"])
+    panel.pause_button.setChecked(True)
+    panel.set_lines(["a", "b"])
+    assert panel.log_field.toPlainText() == "a"
+    panel.pause_button.setChecked(False)
+    assert panel.log_field.toPlainText() == "a\nb"
+
+
 @pytest.fixture
 def qapp():
     from PySide6.QtWidgets import QApplication

@@ -33,7 +33,13 @@ from modbus_sim.network import list_bind_addresses, normalize_host
 
 
 class SettingsPanel(QWidget):
-    def __init__(self, on_change: Callable[[], None] | None = None) -> None:
+    def __init__(
+        self,
+        on_change: Callable[[], None] | None = None,
+        *,
+        on_export: Callable[[], None] | None = None,
+        on_import: Callable[[], None] | None = None,
+    ) -> None:
         super().__init__()
         self._on_change = on_change
         self._initializing = True
@@ -81,6 +87,19 @@ class SettingsPanel(QWidget):
         self.config_summary.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
         self.config_summary.setWordWrap(True)
 
+        self.export_button = QPushButton("設定をエクスポート...")
+        self.export_button.setToolTip("通信設定とレジスタ構成をファイルへ保存します")
+        self.import_button = QPushButton("設定をインポート...")
+        self.import_button.setToolTip("ファイルから通信設定とレジスタ構成を読み込みます（サーバ停止中のみ）")
+        if on_export:
+            self.export_button.clicked.connect(on_export)
+        if on_import:
+            self.import_button.clicked.connect(on_import)
+        transfer_row = QHBoxLayout()
+        transfer_row.addWidget(self.export_button)
+        transfer_row.addWidget(self.import_button)
+        transfer_row.addStretch()
+
         content = QWidget()
         layout = QVBoxLayout(content)
         layout.addWidget(QLabel("通信設定", styleSheet="font-weight: bold; font-size: 13px;"))
@@ -89,6 +108,7 @@ class SettingsPanel(QWidget):
         layout.addWidget(self.rtu_group)
         layout.addWidget(QLabel("現在の設定", styleSheet="font-weight: bold;"))
         layout.addWidget(self.config_summary)
+        layout.addLayout(transfer_row)
         layout.addStretch()
 
         scroll = QScrollArea()
@@ -97,8 +117,8 @@ class SettingsPanel(QWidget):
         outer = QVBoxLayout(self)
         outer.addWidget(scroll)
 
-        self._fill_combos()
         self._wire_handlers()
+        self._fill_combos()
         self.refresh_ip_addresses()
         self.refresh_serial_ports()
         self._apply_mode_state()
@@ -149,6 +169,11 @@ class SettingsPanel(QWidget):
     def set_rtu_settings_enabled(self, enabled: bool) -> None:
         self._rtu_settings_enabled = enabled
         self._apply_mode_state()
+
+    def set_import_enabled(self, enabled: bool) -> None:
+        # エクスポートは現在の状態を読むだけなので常時可能。
+        # インポートはサーバ設定を書き換えるため、稼働中は無効化する。
+        self.import_button.setEnabled(enabled)
 
     def get_tcp_config(self) -> TcpConfig:
         # コンボ初期表示だけでは configured に入らないため、画面上の値を正とする

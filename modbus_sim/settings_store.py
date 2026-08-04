@@ -58,6 +58,28 @@ class SettingsStore:
         data = self.load()
         if not data:
             return
+        self._apply_data(data, settings_panel, tcp_slaves, rtu_slaves)
+
+    def apply_from_path(
+        self,
+        settings_panel: SettingsPanel,
+        tcp_slaves: SlaveRegistry | None = None,
+        rtu_slaves: SlaveRegistry | None = None,
+    ) -> None:
+        """`load()` と異なり、読み込み失敗時に例外を送出する（明示的なインポート用）。"""
+        with self._path.open(encoding="utf-8") as handle:
+            data = json.load(handle)
+        if not isinstance(data, dict):
+            raise ValueError("設定ファイルの形式が不正です")
+        self._apply_data(data, settings_panel, tcp_slaves, rtu_slaves)
+
+    def _apply_data(
+        self,
+        data: dict[str, Any],
+        settings_panel: SettingsPanel,
+        tcp_slaves: SlaveRegistry | None,
+        rtu_slaves: SlaveRegistry | None,
+    ) -> None:
         settings_panel.apply_settings(data)
         tcp_reg = tcp_slaves or tcp_registry
         rtu_reg = rtu_slaves or rtu_registry
