@@ -177,6 +177,21 @@ QT_QPA_PLATFORM=offscreen python -m pytest tests/ -v
 - 通信ログ（要約 / INVALID / クリア）
 - RTU（pymodbus nullmodem による仮想シリアル）
 
+## exe 化（PyInstaller）
+
+単一の実行ファイル（Windows なら `.exe`）にビルドできます。
+
+```bash
+pip install -e ".[build]"   # pyinstaller を追加インストール
+pyinstaller modbus-sim.spec
+```
+
+- 生成物: `dist/ModbusSim`（Windows では `dist/ModbusSim.exe`）
+- **ビルドは配布先と同じ OS 上で行ってください**（PyInstaller はクロスビルド非対応。Linux 上でビルドすると Linux 用バイナリになります）
+- GUI アプリのためコンソールは出しません（`console=False`）。ビルド自体が壊れて起動時に何も表示されず落ちる場合は、`modbus-sim.spec` の `console=False` を一時的に `True` にして再ビルドすると例外内容が見えます
+- 設定ファイル（`settings.json`）の保存先はビルド方法に関わらず常にユーザーのホームディレクトリ配下です
+- アイコンを付けたい場合は `.ico`（Windows）を用意し、spec の `icon=None` をパスに変更してください
+
 ## プロジェクト構成
 
 ```
@@ -184,6 +199,7 @@ modbus-simulator/
 ├── main.py
 ├── requirements.txt
 ├── pyproject.toml
+├── modbus-sim.spec
 ├── README.md
 ├── doc/
 │   └── 要求仕様.md

@@ -24,6 +24,7 @@ MANIFEST
 pip-wheel-metadata/
 *.manifest
 *.spec
+!/modbus-sim.spec
 
 # Virtual environments
 .venv/

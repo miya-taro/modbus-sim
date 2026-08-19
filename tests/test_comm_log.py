@@ -158,6 +158,15 @@ def test_log_panel_set_lines_and_clear(qapp) -> None:
     assert cleared["done"] is True
 
 
+def test_log_panel_empty_lines_shows_placeholder_with_linebreaks(qapp) -> None:
+    from modbus_sim.ui.log_panel import _LOG_EXAMPLES_LINES
+
+    panel = LogPanel()
+    panel.set_lines(["a"])  # プレースホルダから実ログ表示へ
+    panel.set_lines([])  # 再び空になったらプレースホルダへ戻る
+    assert panel.log_field.toPlainText() == "\n".join(_LOG_EXAMPLES_LINES)
+
+
 def test_log_panel_mode_filter(qapp) -> None:
     panel = LogPanel()
     lines = [
@@ -192,6 +201,52 @@ def test_log_panel_pause_holds_display_until_resumed(qapp) -> None:
     assert panel.log_field.toPlainText() == "a"
     panel.pause_button.setChecked(False)
     assert panel.log_field.toPlainText() == "a\nb"
+
+
+def test_line_category_classifies_rx_tx_invalid() -> None:
+    from modbus_sim.ui.log_panel import _line_category
+
+    assert _line_category("[t] TCP RX device=1 FC=03 | 00") == "rx"
+    assert _line_category("[t] TCP TX device=1 FC=03 | 00") == "tx"
+    assert _line_category("[t] TCP INVALID reason: FF") == "invalid"
+    assert _line_category("[t] TCP server started on 127.0.0.1:5020") == "other"
+
+
+def test_lines_to_html_highlights_invalid_and_tx() -> None:
+    from modbus_sim.ui.log_panel import _lines_to_html
+
+    html = _lines_to_html(["[t] TCP INVALID bad frame", "[t] TCP TX ok", "[t] TCP RX ok"])
+    assert "#b00020" in html  # INVALID は赤で強調
+    assert "#555555" in html  # TX は控えめな色
+    # RX は特別な色指定なし（無地の div）
+    assert '<div>[t] TCP RX ok</div>' in html
+
+
+def test_log_panel_pause_warns_when_buffer_cap_exceeded(qapp) -> None:
+    from modbus_sim.server_manager import LOG_BUFFER_MAXLEN
+
+    panel = LogPanel()
+    panel.show()  # isVisible() は祖先の表示状態も見るため、テストでも show() しておく
+    panel.set_lines(["a"], total_count=100)
+    panel.pause_button.setChecked(True)
+    assert panel.drop_warning_label.isVisible() is False
+
+    # 上限を超える件数がポーズ中に発行されたことを模す
+    total_after = 100 + LOG_BUFFER_MAXLEN + 50
+    panel.set_lines(["a"] * LOG_BUFFER_MAXLEN, total_count=total_after)
+    panel.pause_button.setChecked(False)
+
+    assert panel.drop_warning_label.isVisible() is True
+    assert "50" in panel.drop_warning_label.text()
+
+
+def test_log_panel_pause_no_warning_when_within_capacity(qapp) -> None:
+    panel = LogPanel()
+    panel.set_lines(["a"], total_count=10)
+    panel.pause_button.setChecked(True)
+    panel.set_lines(["a", "b"], total_count=12)
+    panel.pause_button.setChecked(False)
+    assert panel.drop_warning_label.isVisible() is False
 
 
 @pytest.fixture

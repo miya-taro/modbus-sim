@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 
-from modbus_sim.config import RegisterKind, ValueKind
+from modbus_sim.config import AutoMode, FaultException, FaultMode, RegisterKind, ValueKind
 
 
 @dataclass
@@ -15,12 +15,37 @@ class RegisterPoint:
     tag: str = ""
     raw: int = 0
 
+    # 異常応答シミュレーション（Holding/Input Register のみ）
+    fault_mode: FaultMode = FaultMode.NONE
+    fault_exception: FaultException = FaultException.DEVICE_FAILURE
+
+    # 応答遅延（ミリ秒）。max > min ならリクエストごとにこの範囲でランダム抽選。
+    delay_min_ms: int = 0
+    delay_max_ms: int = 0
+
+    # 値の自動変化（Holding/Input Register のみ）
+    auto_mode: AutoMode = AutoMode.NONE
+    auto_min: int = 0
+    auto_max: int = 0
+    auto_step: float = 1.0
+    auto_period_sec: float = 1.0
+
+    # 自動変化の内部進行状態。設定値ではないので比較・表示・永続化の対象外。
+    auto_phase: float = field(default=0.0, compare=False, repr=False)
+
     @property
     def key(self) -> tuple[int, RegisterKind]:
         return self.address, self.kind
 
     def is_empty(self) -> bool:
         return self.tag == "" and self.raw == 0
+
+    def has_advanced_settings(self) -> bool:
+        return (
+            self.fault_mode != FaultMode.NONE
+            or self.delay_max_ms > 0
+            or self.auto_mode != AutoMode.NONE
+        )
 
 
 @dataclass

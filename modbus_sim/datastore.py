@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+import asyncio
+import math
+import random
 import struct
 import time
 from collections.abc import Callable
@@ -11,7 +14,15 @@ from pymodbus.constants import ExcCodes
 from pymodbus.simulator import DataType, SimData, SimDevice
 from pymodbus.simulator.simutils import SimUtils
 
-from modbus_sim.config import ACTIVITY_TIMEOUT_SEC, REGISTER_COUNT, RegisterKind, ValueKind
+from modbus_sim.config import (
+    ACTIVITY_TIMEOUT_SEC,
+    REGISTER_COUNT,
+    AutoMode,
+    FaultException,
+    FaultMode,
+    RegisterKind,
+    ValueKind,
+)
 from modbus_sim.models import RegisterPoint
 
 ActionFn = Callable[
@@ -20,6 +31,38 @@ ActionFn = Callable[
 ]
 
 BlockMap = dict[str, tuple[int, int, list[int], list[int]] | None]
+
+# FaultMode.NO_RESPONSE のとき、応答を送らずこの秒数だけ待つ
+# （マスタのタイムアウトより十分長い想定。切断/サーバ停止で中断される）。
+_NO_RESPONSE_HANG_SECONDS = 24 * 60 * 60
+
+_FAULT_EXCEPTION_MAP: dict[FaultException, ExcCodes] = {
+    FaultException.ILLEGAL_FUNCTION: ExcCodes.ILLEGAL_FUNCTION,
+    FaultException.ILLEGAL_DATA_ADDRESS: ExcCodes.ILLEGAL_ADDRESS,
+    FaultException.ILLEGAL_DATA_VALUE: ExcCodes.ILLEGAL_VALUE,
+    FaultException.DEVICE_FAILURE: ExcCodes.DEVICE_FAILURE,
+    FaultException.ACKNOWLEDGE: ExcCodes.ACKNOWLEDGE,
+    FaultException.DEVICE_BUSY: ExcCodes.DEVICE_BUSY,
+    FaultException.NEGATIVE_ACKNOWLEDGE: ExcCodes.NEGATIVE_ACKNOWLEDGE,
+    FaultException.MEMORY_PARITY_ERROR: ExcCodes.MEMORY_PARITY_ERROR,
+    FaultException.GATEWAY_PATH_UNAVAILABLE: ExcCodes.GATEWAY_PATH_UNAVIABLE,
+    FaultException.GATEWAY_NO_RESPONSE: ExcCodes.GATEWAY_NO_RESPONSE,
+}
+
+# fault_mode / auto_mode の対象は Holding/Input Register のみ（コメント参照は config.py 側）。
+_HOLDING_FAULT_FCS = (3, 6, 16, 22, 23)
+_INPUT_FAULT_FC = 4
+
+
+def datatype_bounds(datatype: ValueKind) -> tuple[int, int]:
+    """レジスタ datatype が表現できる raw 値の範囲 (min, max)。"""
+    if datatype == ValueKind.INT16:
+        return -32768, 32767
+    if datatype == ValueKind.INT32:
+        return -2147483648, 2147483647
+    if datatype == ValueKind.BOOL:
+        return 0, 1
+    return 0, 65535
 
 
 def _block_key_for_kind(kind: RegisterKind) -> str:
@@ -188,6 +231,45 @@ class SlaveDatastore:
             memory = self._memory(point.kind)
             _write_register_point_to_block(point, blocks.get(_block_key_for_kind(point.kind)), memory)
 
+    def _fault_kind_for_fc(self, function_code: int) -> RegisterKind | None:
+        if function_code in _HOLDING_FAULT_FCS:
+            return RegisterKind.HOLDING_REGISTER
+        if function_code == _INPUT_FAULT_FC:
+            return RegisterKind.INPUT_REGISTER
+        return None
+
+    def _first_fault_point(self, kind: RegisterKind, address: int, count: int) -> RegisterPoint | None:
+        for offset in range(max(count, 1)):
+            point = self.points.get((address + offset, kind))
+            if point is not None and point.has_advanced_settings():
+                return point
+        return None
+
+    async def _apply_faults(self, function_code: int, address: int, count: int) -> ExcCodes | None:
+        """該当アドレスに fault/delay 設定があれば適用する。
+
+        戻り値が ExcCodes の場合、呼び出し側は通常処理をせずそれを応答として返す。
+        """
+        kind = self._fault_kind_for_fc(function_code)
+        if kind is None:
+            return None
+        point = self._first_fault_point(kind, address, count)
+        if point is None:
+            return None
+        if point.delay_max_ms > 0:
+            delay_ms = point.delay_min_ms
+            if point.delay_max_ms > point.delay_min_ms:
+                delay_ms = random.randint(point.delay_min_ms, point.delay_max_ms)
+            if delay_ms > 0:
+                await asyncio.sleep(delay_ms / 1000)
+        if point.fault_mode == FaultMode.NO_RESPONSE:
+            # マスタの切断/サーバ停止でこの await はキャンセルされる想定。
+            await asyncio.sleep(_NO_RESPONSE_HANG_SECONDS)
+            return None
+        if point.fault_mode == FaultMode.EXCEPTION:
+            return _FAULT_EXCEPTION_MAP[point.fault_exception]
+        return None
+
     def make_action(self) -> ActionFn:
         slave = self
 
@@ -199,6 +281,9 @@ class SlaveDatastore:
             current_registers: list[int],
             set_values: list[int] | list[bool] | None,
         ) -> None | ExcCodes:
+            fault_result = await slave._apply_faults(function_code, address, _count)
+            if fault_result is not None:
+                return fault_result
             if function_code in (1, 5, 15):
                 _sync_bits_to_registers(slave._coils, current_registers, start_address)
                 if set_values is not None:
@@ -240,6 +325,22 @@ class SlaveDatastore:
                 )
             else:
                 point.raw = raw_from_memory(point, hi=int(self.read_raw(kind, index)))
+
+    def tick_auto_values(self, dt: float) -> bool:
+        """自動変化が有効な全ポイントを dt 秒進める。値が変わったら True。"""
+        changed = False
+        for point in self.points.values():
+            if point.auto_mode == AutoMode.NONE:
+                continue
+            if point.kind not in (RegisterKind.HOLDING_REGISTER, RegisterKind.INPUT_REGISTER):
+                continue
+            new_raw = _next_auto_value(point, dt)
+            if new_raw is None or new_raw == point.raw:
+                continue
+            point.raw = new_raw
+            self._write_raw(point)
+            changed = True
+        return changed
 
     def build_sim_device(self) -> SimDevice:
         return SimDevice(
@@ -329,7 +430,12 @@ class SlaveRegistry:
                 self._slaves[slave_id].unbind_runtime(runtime)
 
     def sync_from_server(self) -> bool:
-        return any(slave.sync_from_server() for slave in self._slaves.values())
+        # any(...) だと最初に True を返した slave で残りの評価が打ち切られ、
+        # 後続の slave が同期されなくなる。全 slave を必ず評価する。
+        return any([slave.sync_from_server() for slave in self._slaves.values()])
+
+    def tick_auto_values(self, dt: float) -> bool:
+        return any([slave.tick_auto_values(dt) for slave in self._slaves.values()])
 
     def to_dict(self) -> dict:
         slaves = []
@@ -337,15 +443,24 @@ class SlaveRegistry:
             slave = self._slaves[slave_id]
             points = []
             for point in slave.list_points():
-                points.append(
-                    {
-                        "address": point.address,
-                        "kind": point.kind.value,
-                        "datatype": point.datatype.value,
-                        "raw": point.raw,
-                        "tag": point.tag,
-                    }
-                )
+                point_data = {
+                    "address": point.address,
+                    "kind": point.kind.value,
+                    "datatype": point.datatype.value,
+                    "raw": point.raw,
+                    "tag": point.tag,
+                }
+                if point.has_advanced_settings():
+                    point_data["fault_mode"] = point.fault_mode.value
+                    point_data["fault_exception"] = point.fault_exception.value
+                    point_data["delay_min_ms"] = point.delay_min_ms
+                    point_data["delay_max_ms"] = point.delay_max_ms
+                    point_data["auto_mode"] = point.auto_mode.value
+                    point_data["auto_min"] = point.auto_min
+                    point_data["auto_max"] = point.auto_max
+                    point_data["auto_step"] = point.auto_step
+                    point_data["auto_period_sec"] = point.auto_period_sec
+                points.append(point_data)
             slaves.append(
                 {
                     "id": slave_id,
@@ -365,7 +480,10 @@ class SlaveRegistry:
         for entry in slaves_data:
             if not isinstance(entry, dict):
                 continue
-            slave_id = int(entry.get("id", 0))
+            try:
+                slave_id = int(entry.get("id", 0))
+            except (TypeError, ValueError):
+                continue
             if not 1 <= slave_id <= 247:
                 continue
             self._slaves[slave_id] = SlaveDatastore(slave_id, owner=self)
@@ -383,6 +501,24 @@ class SlaveRegistry:
                             tag=str(point_data.get("tag", "")),
                             raw=int(point_data.get("raw", 0)),
                         )
+                        if "fault_mode" in point_data:
+                            point.fault_mode = FaultMode(point_data["fault_mode"])
+                        if "fault_exception" in point_data:
+                            point.fault_exception = FaultException(point_data["fault_exception"])
+                        if "delay_min_ms" in point_data:
+                            point.delay_min_ms = int(point_data["delay_min_ms"])
+                        if "delay_max_ms" in point_data:
+                            point.delay_max_ms = int(point_data["delay_max_ms"])
+                        if "auto_mode" in point_data:
+                            point.auto_mode = AutoMode(point_data["auto_mode"])
+                        if "auto_min" in point_data:
+                            point.auto_min = int(point_data["auto_min"])
+                        if "auto_max" in point_data:
+                            point.auto_max = int(point_data["auto_max"])
+                        if "auto_step" in point_data:
+                            point.auto_step = float(point_data["auto_step"])
+                        if "auto_period_sec" in point_data:
+                            point.auto_period_sec = float(point_data["auto_period_sec"])
                         self._slaves[slave_id].upsert_point(point)
                     except (KeyError, ValueError):
                         continue
@@ -390,11 +526,52 @@ class SlaveRegistry:
             self._slaves[1] = SlaveDatastore(1, owner=self)
             self._tags[1] = ""
         selected = data.get("selected_slave_id", 1)
-        if selected in self._slaves:
-            self.selected_slave_id = int(selected)
+        if isinstance(selected, int) and selected in self._slaves:
+            self.selected_slave_id = selected
         else:
             self.selected_slave_id = self.list_slave_ids()[0]
         self.invalidate_sim_devices()
+
+
+def _next_auto_value(point: RegisterPoint, dt: float) -> int | None:
+    """auto_mode に従い dt 秒進めた次の raw 値を返す（変化なし/未設定なら None）。
+
+    point.auto_phase を内部進行状態として書き換える副作用がある。
+    """
+    if point.auto_mode == AutoMode.NONE:
+        return None
+    lo, hi = datatype_bounds(point.datatype)
+    auto_min = max(point.auto_min, lo)
+    auto_max = min(point.auto_max, hi)
+    if auto_min >= auto_max:
+        return None  # 範囲が未設定/不正なら何もしない
+    period = point.auto_period_sec
+    if period <= 0:
+        return None
+
+    if point.auto_mode == AutoMode.SINE:
+        point.auto_phase = (point.auto_phase + dt) % period
+        span = auto_max - auto_min
+        value = auto_min + span * (0.5 + 0.5 * math.sin(2 * math.pi * point.auto_phase / period))
+        return int(round(value))
+
+    # INCREMENT / RANDOM_WALK は auto_period_sec ごとに 1 ステップ進める
+    point.auto_phase += dt
+    if point.auto_phase < period:
+        return None
+    point.auto_phase = 0.0
+
+    if point.auto_mode == AutoMode.INCREMENT:
+        span = auto_max - auto_min + 1
+        step = int(round(point.auto_step)) or 1  # 0 は「実質無変化」で分かりにくいため 1 扱い
+        return auto_min + ((point.raw - auto_min) + step) % span
+
+    if point.auto_mode == AutoMode.RANDOM_WALK:
+        step = abs(point.auto_step) or 1.0
+        delta = random.uniform(-step, step)
+        return max(auto_min, min(auto_max, int(round(point.raw + delta))))
+
+    return None
 
 
 def validate_address(address: int, datatype: ValueKind) -> None:

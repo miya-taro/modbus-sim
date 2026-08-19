@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Callable
+from dataclasses import replace
 from pathlib import Path
 
 from PySide6.QtCore import QTimer, Qt
@@ -13,6 +14,7 @@ from PySide6.QtWidgets import (
     QComboBox,
     QDialog,
     QDialogButtonBox,
+    QDoubleSpinBox,
     QFileDialog,
     QFormLayout,
     QGroupBox,
@@ -33,9 +35,17 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from modbus_sim.config import REGISTER_COUNT, RegisterKind, ValueKind
+from modbus_sim.config import (
+    REGISTER_COUNT,
+    AutoMode,
+    FaultException,
+    FaultMode,
+    RegisterKind,
+    ValueKind,
+)
 from modbus_sim.datastore import (
     SlaveRegistry,
+    datatype_bounds,
     format_decoded_display,
     parse_decoded_input,
     registry,
@@ -67,6 +77,34 @@ _KIND_LABELS = {
 DATATYPE_CHOICES = (ValueKind.UINT16, ValueKind.INT16, ValueKind.INT32)
 # Coil / Discrete Input は 1bit 固定のため Datatype は bool のみ選択可
 BIT_DATATYPE_CHOICES = (ValueKind.BOOL,)
+
+# 異常応答/自動変化は Holding/Input Register のみ対応
+ADVANCED_KINDS = (RegisterKind.HOLDING_REGISTER, RegisterKind.INPUT_REGISTER)
+
+_FAULT_MODE_LABELS = {
+    FaultMode.NONE: "なし",
+    FaultMode.EXCEPTION: "例外応答を返す",
+    FaultMode.NO_RESPONSE: "応答しない（タイムアウト）",
+}
+_FAULT_EXCEPTION_LABELS = {
+    FaultException.ILLEGAL_FUNCTION: "01: ILLEGAL FUNCTION",
+    FaultException.ILLEGAL_DATA_ADDRESS: "02: ILLEGAL DATA ADDRESS",
+    FaultException.ILLEGAL_DATA_VALUE: "03: ILLEGAL DATA VALUE",
+    FaultException.DEVICE_FAILURE: "04: SLAVE DEVICE FAILURE",
+    FaultException.ACKNOWLEDGE: "05: ACKNOWLEDGE",
+    FaultException.DEVICE_BUSY: "06: SLAVE DEVICE BUSY",
+    FaultException.NEGATIVE_ACKNOWLEDGE: "07: NEGATIVE ACKNOWLEDGE",
+    FaultException.MEMORY_PARITY_ERROR: "08: MEMORY PARITY ERROR",
+    FaultException.GATEWAY_PATH_UNAVAILABLE: "10: GATEWAY PATH UNAVAILABLE",
+    FaultException.GATEWAY_NO_RESPONSE: "11: GATEWAY TARGET DEVICE FAILED TO RESPOND",
+}
+_AUTO_MODE_LABELS = {
+    AutoMode.NONE: "なし",
+    AutoMode.INCREMENT: "インクリメント（周期ごとに +step、上限で折り返し）",
+    AutoMode.RANDOM_WALK: "ランダムウォーク（周期ごとに ±step 内で変動）",
+    AutoMode.SINE: "サイン波（周期で下限〜上限を往復）",
+}
+ADVANCED_ROW_COLOR = QColor("#eef2ff")
 
 
 def _datatype_choices_for(kind: RegisterKind) -> tuple[ValueKind, ...]:
@@ -222,6 +260,122 @@ class RangeAddDialog(QDialog):
             raw,
             self.tag_prefix_field.text().strip(),
         )
+
+
+class RegisterAdvancedDialog(QDialog):
+    """1レジスタ分の異常応答・応答遅延・自動変化を設定するダイアログ。"""
+
+    def __init__(self, parent: QWidget | None, point: RegisterPoint) -> None:
+        super().__init__(parent)
+        self._point = point
+        self.setWindowTitle(f"詳細設定 - Addr {point.address} ({_KIND_LABELS[point.kind]})")
+
+        layout = QVBoxLayout(self)
+        layout.addWidget(QLabel(f"Addr {point.address} / {_KIND_LABELS[point.kind]} / Tag: {point.tag or '(未設定)'}"))
+
+        fault_group = QGroupBox("異常応答")
+        fault_form = QFormLayout(fault_group)
+        self.fault_mode_combo = QComboBox()
+        for mode in FaultMode:
+            self.fault_mode_combo.addItem(_FAULT_MODE_LABELS[mode], mode)
+        self.fault_mode_combo.setCurrentIndex(list(FaultMode).index(point.fault_mode))
+        fault_form.addRow("動作", self.fault_mode_combo)
+
+        self.fault_exception_combo = QComboBox()
+        for exc in FaultException:
+            self.fault_exception_combo.addItem(_FAULT_EXCEPTION_LABELS[exc], exc)
+        self.fault_exception_combo.setCurrentIndex(list(FaultException).index(point.fault_exception))
+        fault_form.addRow("例外コード", self.fault_exception_combo)
+        layout.addWidget(fault_group)
+
+        delay_group = QGroupBox("応答遅延（ミリ秒）")
+        delay_form = QFormLayout(delay_group)
+        self.delay_min_spin = QSpinBox()
+        self.delay_min_spin.setRange(0, 60000)
+        self.delay_min_spin.setValue(point.delay_min_ms)
+        self.delay_max_spin = QSpinBox()
+        self.delay_max_spin.setRange(0, 60000)
+        self.delay_max_spin.setValue(point.delay_max_ms)
+        delay_form.addRow("最小", self.delay_min_spin)
+        delay_form.addRow("最大", self.delay_max_spin)
+        delay_form.addRow(QLabel("最大 > 最小ならリクエストごとにこの範囲でランダム抽選します。"))
+        layout.addWidget(delay_group)
+
+        auto_supported = point.kind in ADVANCED_KINDS
+        auto_group = QGroupBox("値の自動変化")
+        auto_group.setEnabled(auto_supported)
+        auto_form = QFormLayout(auto_group)
+        self.auto_mode_combo = QComboBox()
+        for mode in AutoMode:
+            self.auto_mode_combo.addItem(_AUTO_MODE_LABELS[mode], mode)
+        self.auto_mode_combo.setCurrentIndex(list(AutoMode).index(point.auto_mode))
+        auto_form.addRow("動作", self.auto_mode_combo)
+
+        lo, hi = datatype_bounds(point.datatype)
+        self.auto_min_spin = QSpinBox()
+        self.auto_min_spin.setRange(lo, hi)
+        self.auto_min_spin.setValue(point.auto_min)
+        self.auto_max_spin = QSpinBox()
+        self.auto_max_spin.setRange(lo, hi)
+        self.auto_max_spin.setValue(point.auto_max)
+        auto_form.addRow("下限", self.auto_min_spin)
+        auto_form.addRow("上限", self.auto_max_spin)
+
+        self.auto_step_spin = QDoubleSpinBox()
+        self.auto_step_spin.setRange(-1_000_000, 1_000_000)
+        self.auto_step_spin.setValue(point.auto_step)
+        auto_form.addRow("step（サイン波では未使用）", self.auto_step_spin)
+
+        self.auto_period_spin = QDoubleSpinBox()
+        self.auto_period_spin.setRange(0.1, 86400)
+        self.auto_period_spin.setDecimals(1)
+        self.auto_period_spin.setValue(point.auto_period_sec)
+        auto_form.addRow("周期（秒）", self.auto_period_spin)
+        if not auto_supported:
+            auto_form.addRow(QLabel("Coil / Discrete Input は自動変化に対応していません。"))
+        layout.addWidget(auto_group)
+
+        self.auto_mode_combo.currentIndexChanged.connect(self._sync_auto_field_defaults)
+
+        buttons = QDialogButtonBox(
+            QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel
+        )
+        buttons.accepted.connect(self._on_accept)
+        buttons.rejected.connect(self.reject)
+        layout.addWidget(buttons)
+
+    def _sync_auto_field_defaults(self) -> None:
+        # 初めて有効化したとき (0-0 のまま) は datatype の全域を初期レンジにする
+        if self.auto_mode_combo.currentData() == AutoMode.NONE:
+            return
+        if self.auto_min_spin.value() == 0 and self.auto_max_spin.value() == 0:
+            lo, hi = datatype_bounds(self._point.datatype)
+            self.auto_min_spin.setValue(lo)
+            self.auto_max_spin.setValue(hi)
+
+    def _on_accept(self) -> None:
+        if self.delay_max_spin.value() < self.delay_min_spin.value():
+            QMessageBox.warning(self, "エラー", "応答遅延の最大値は最小値以上にしてください。")
+            return
+        if (
+            self.auto_mode_combo.currentData() != AutoMode.NONE
+            and self.auto_min_spin.value() >= self.auto_max_spin.value()
+        ):
+            QMessageBox.warning(self, "エラー", "自動変化の上限は下限より大きくしてください。")
+            return
+        self.accept()
+
+    def apply_to(self, point: RegisterPoint) -> None:
+        point.fault_mode = FaultMode(self.fault_mode_combo.currentData())
+        point.fault_exception = FaultException(self.fault_exception_combo.currentData())
+        point.delay_min_ms = self.delay_min_spin.value()
+        point.delay_max_ms = self.delay_max_spin.value()
+        point.auto_mode = AutoMode(self.auto_mode_combo.currentData())
+        point.auto_min = self.auto_min_spin.value()
+        point.auto_max = self.auto_max_spin.value()
+        point.auto_step = self.auto_step_spin.value()
+        point.auto_period_sec = self.auto_period_spin.value()
+        point.auto_phase = 0.0
 
 
 class SlavePanel(QWidget):
@@ -389,10 +543,10 @@ class SlavePanel(QWidget):
             state = self._registry.activity_state(slave_id, any_server_running=any_server_running)
             dot.setStyleSheet(f"color: {_ACTIVITY_COLORS[state]}; font-size: 12px;")
 
-    def refresh_from_server(self) -> bool:
+    def refresh_from_server(self, *, force: bool = False) -> bool:
         if self.table.state() == QAbstractItemView.State.EditingState:
             return False
-        changed = self._registry.sync_from_server()
+        changed = self._registry.sync_from_server() or force
         if changed:
             self._rebuild_table()
         return changed
@@ -491,10 +645,14 @@ class SlavePanel(QWidget):
                     source.datatype.value,
                     source.tag,
                 ]
+                advanced = point is not None and point.has_advanced_settings()
                 for col, text_value in enumerate(values):
                     item = QTableWidgetItem(text_value or "")
                     if not self._grid_enabled or (col == DATATYPE_COL and not datatype_editable):
                         item.setFlags(item.flags() & ~Qt.ItemFlag.ItemIsEditable)
+                    if advanced:
+                        item.setBackground(ADVANCED_ROW_COLOR)
+                        item.setToolTip("異常応答/遅延/自動変化が設定されています（右クリック→詳細設定で確認）")
                     self.table.setItem(row_index, col, item)
         finally:
             self.table.setUpdatesEnabled(True)
@@ -552,13 +710,9 @@ class SlavePanel(QWidget):
         col = GRID_FIELDS.index(field) if field in GRID_FIELDS else None
         try:
             current = point or self._draft or self._new_draft_point()
-            updated = RegisterPoint(
-                address=current.address,
-                kind=current.kind if point is not None else self._active_kind,
-                datatype=current.datatype,
-                tag=current.tag,
-                raw=current.raw,
-            )
+            # dataclasses.replace で複製することで、異常応答/遅延/自動変化など
+            # グリッド外の詳細設定を編集のたびに失わないようにする。
+            updated = replace(current)
             if point is None and updated.kind != self._active_kind:
                 updated.kind = self._active_kind
                 updated.datatype = _default_datatype_for(self._active_kind)
@@ -758,6 +912,11 @@ class SlavePanel(QWidget):
             dup_action = menu.addAction(dup_label)
             dup_action.triggered.connect(lambda: self._duplicate_rows(rows))
 
+        if len(rows) == 1:
+            menu.addSeparator()
+            advanced_action = menu.addAction("詳細設定...（異常応答/遅延/自動変化）")
+            advanced_action.triggered.connect(lambda: self._open_advanced_dialog(rows[0]))
+
         paste_action = menu.addAction("貼り付け")
         paste_action.setEnabled(bool(QApplication.clipboard().text().strip()))
         paste_action.triggered.connect(self._paste_rows)
@@ -771,6 +930,21 @@ class SlavePanel(QWidget):
         if not rows and not paste_action.isEnabled():
             return
         menu.exec(self.table.viewport().mapToGlobal(pos))
+
+    def _open_advanced_dialog(self, row: int) -> None:
+        if row >= len(self._row_meta):
+            return
+        point = self._row_meta[row]
+        if point is None:
+            return
+        dialog = RegisterAdvancedDialog(self, point)
+        if dialog.exec() != QDialog.DialogCode.Accepted:
+            return
+        dialog.apply_to(point)
+        self._registry.get_slave(self._registry.selected_slave_id).upsert_point(point)
+        self._rebuild_table()
+        if self._on_change:
+            self._on_change()
 
     def _copy_rows(self, rows: list[int]) -> None:
         points = [self._row_meta[row] for row in rows if self._row_meta[row] is not None]

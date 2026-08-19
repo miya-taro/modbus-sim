@@ -12,6 +12,8 @@ from modbus_sim.datastore import SlaveRegistry
 from modbus_sim.logging_handler import LoggingModbusSerialServer, LoggingModbusTcpServer
 from modbus_sim.packet_log import detect_invalid_tcp_frame, format_trace_log_line
 
+LOG_BUFFER_MAXLEN = 2000
+
 
 def _parse_slave_id(mode: CommMode, sending: bool, packet: bytes) -> int | None:
     if sending:
@@ -53,7 +55,10 @@ class ModbusServerManager:
         self._on_tcp_state_change = on_tcp_state_change
         self._on_rtu_state_change = on_rtu_state_change
         self._on_tcp_client_count_change = on_tcp_client_count_change
-        self.log_buffer: deque[str] = deque(maxlen=2000)
+        self.log_buffer: deque[str] = deque(maxlen=LOG_BUFFER_MAXLEN)
+        # log_buffer は maxlen 到達で古い行から自動破棄されるため、
+        # 「一時停止中に何件破棄されたか」を UI 側で計算できるよう総発行数を別途持つ。
+        self.total_log_count = 0
         self.tcp_client_count = 0
 
     def _registry_for(self, mode: CommMode) -> SlaveRegistry:
@@ -73,8 +78,13 @@ class ModbusServerManager:
 
     def _emit_log(self, message: str) -> None:
         self.log_buffer.append(message)
+        self.total_log_count += 1
         if self._on_log:
             self._on_log(message)
+
+    def clear_log(self) -> None:
+        self.log_buffer.clear()
+        self.total_log_count = 0
 
     def _emit_tcp_state(self, running: bool) -> None:
         if self._on_tcp_state_change:
@@ -133,7 +143,7 @@ class ModbusServerManager:
         if self.tcp_running:
             raise RuntimeError("TCP server is already running")
         self.tcp_client_count = 0
-        self._tcp_server = LoggingModbusTcpServer(
+        server = LoggingModbusTcpServer(
             self._tcp_registry.build_sim_devices(),
             address=(config.host, config.port),
             trace_packet=self._make_trace_packet(CommMode.TCP),
@@ -141,7 +151,11 @@ class ModbusServerManager:
             on_invalid=self._make_on_invalid(CommMode.TCP),
         )
         # background=True: listen 完了後に戻る（クライアント接続前に待受準備を完了させる）
-        await self._tcp_server.serve_forever(background=True)
+        # serve_forever 失敗時（例: ポート使用中）は self._tcp_server を書き換えない。
+        # 先に書き換えると tcp_running が True のまま固まり、UI 上は「停止」なのに
+        # 再起動もできない不整合な状態になる。
+        await server.serve_forever(background=True)
+        self._tcp_server = server
         self._tcp_task = None
         self._tcp_registry.bind_server(self._tcp_server.context)
         self._emit_tcp_state(True)
@@ -153,7 +167,7 @@ class ModbusServerManager:
     async def start_rtu(self, config: RtuConfig) -> None:
         if self.rtu_running:
             raise RuntimeError("RTU server is already running")
-        self._rtu_server = LoggingModbusSerialServer(
+        server = LoggingModbusSerialServer(
             self._rtu_registry.build_sim_devices(),
             port=config.port,
             baudrate=config.baudrate,
@@ -163,7 +177,9 @@ class ModbusServerManager:
             trace_packet=self._make_trace_packet(CommMode.RTU),
             on_invalid=self._make_on_invalid(CommMode.RTU),
         )
-        await self._rtu_server.serve_forever(background=True)
+        # start_tcp と同様、失敗時は self._rtu_server を書き換えない。
+        await server.serve_forever(background=True)
+        self._rtu_server = server
         self._rtu_task = None
         self._rtu_registry.bind_server(self._rtu_server.context)
         self._emit_rtu_state(True)

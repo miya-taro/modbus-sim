@@ -272,50 +272,61 @@ class SettingsPanel(QWidget):
 
     def apply_settings(self, data: dict[str, Any]) -> None:
         self._initializing = True
-        tcp = data.get("tcp", {})
-        if isinstance(tcp, dict):
-            host = tcp.get("host")
-            port = tcp.get("port")
-            if host:
-                self.refresh_ip_addresses()
-                self.tcp_host.setCurrentText(str(host))
-                self.comm.tcp_host = normalize_host(str(host))
-                self.comm.mark("tcp_host")
-            if port is not None:
-                self.tcp_port.setText(str(port))
-                self.comm.tcp_port = int(port)
-                self.comm.mark("tcp_port")
+        try:
+            tcp = data.get("tcp", {})
+            if isinstance(tcp, dict):
+                host = tcp.get("host")
+                port = tcp.get("port")
+                if host:
+                    try:
+                        normalized_host = normalize_host(str(host))
+                    except ValueError:
+                        normalized_host = None
+                    if normalized_host is not None:
+                        self.refresh_ip_addresses()
+                        self.tcp_host.setCurrentText(str(host))
+                        self.comm.tcp_host = normalized_host
+                        self.comm.mark("tcp_host")
+                if port is not None:
+                    try:
+                        port_value = int(port)
+                    except (TypeError, ValueError):
+                        port_value = None
+                    if port_value is not None:
+                        self.tcp_port.setText(str(port_value))
+                        self.comm.tcp_port = port_value
+                        self.comm.mark("tcp_port")
 
-        rtu = data.get("rtu", {})
-        if isinstance(rtu, dict):
-            port_name = rtu.get("port")
-            if port_name:
-                self.refresh_serial_ports()
-                self.rtu_port.setCurrentText(str(port_name))
-                self.comm.rtu_port = str(port_name)
-                self.comm.mark("rtu_port")
-            baud = rtu.get("baudrate")
-            if baud is not None:
-                self.rtu_baudrate.setCurrentText(str(baud))
-                self.comm.rtu_baudrate = int(baud)
-                self.comm.mark("rtu_baudrate")
-            parity = rtu.get("parity")
-            if parity:
-                self.rtu_parity.setCurrentText(str(parity))
-                self.comm.rtu_parity = str(parity)
-                self.comm.mark("rtu_parity")
-            bytesize = rtu.get("bytesize")
-            if bytesize is not None:
-                self.rtu_bytesize.setCurrentText(str(bytesize))
-                self.comm.rtu_bytesize = int(bytesize)
-                self.comm.mark("rtu_bytesize")
-            stopbits = rtu.get("stopbits")
-            if stopbits is not None:
-                self.rtu_stopbits.setCurrentText(str(stopbits))
-                self.comm.rtu_stopbits = int(stopbits)
-                self.comm.mark("rtu_stopbits")
-
-        self._initializing = False
+            rtu = data.get("rtu", {})
+            if isinstance(rtu, dict):
+                port_name = rtu.get("port")
+                if port_name:
+                    self.refresh_serial_ports()
+                    self.rtu_port.setCurrentText(str(port_name))
+                    self.comm.rtu_port = str(port_name)
+                    self.comm.mark("rtu_port")
+                for key, combo, attr in (
+                    ("baudrate", self.rtu_baudrate, "rtu_baudrate"),
+                    ("bytesize", self.rtu_bytesize, "rtu_bytesize"),
+                    ("stopbits", self.rtu_stopbits, "rtu_stopbits"),
+                ):
+                    raw_value = rtu.get(key)
+                    if raw_value is None:
+                        continue
+                    try:
+                        int_value = int(raw_value)
+                    except (TypeError, ValueError):
+                        continue
+                    combo.setCurrentText(str(int_value))
+                    setattr(self.comm, attr, int_value)
+                    self.comm.mark(attr)
+                parity = rtu.get("parity")
+                if parity:
+                    self.rtu_parity.setCurrentText(str(parity))
+                    self.comm.rtu_parity = str(parity)
+                    self.comm.mark("rtu_parity")
+        finally:
+            self._initializing = False
         self.update_summary()
 
     def update_summary(self) -> None:

@@ -34,6 +34,38 @@ class ValueKind(str, Enum):
     BOOL = "bool"
 
 
+class FaultMode(str, Enum):
+    """レジスタ単位の異常応答シミュレーション（Holding/Input Register のみ対応）。"""
+
+    NONE = "none"
+    EXCEPTION = "exception"
+    NO_RESPONSE = "no_response"
+
+
+class FaultException(str, Enum):
+    """FaultMode.EXCEPTION 時に返す Modbus 例外コード。"""
+
+    ILLEGAL_FUNCTION = "illegal_function"
+    ILLEGAL_DATA_ADDRESS = "illegal_data_address"
+    ILLEGAL_DATA_VALUE = "illegal_data_value"
+    DEVICE_FAILURE = "device_failure"
+    ACKNOWLEDGE = "acknowledge"
+    DEVICE_BUSY = "device_busy"
+    NEGATIVE_ACKNOWLEDGE = "negative_acknowledge"
+    MEMORY_PARITY_ERROR = "memory_parity_error"
+    GATEWAY_PATH_UNAVAILABLE = "gateway_path_unavailable"
+    GATEWAY_NO_RESPONSE = "gateway_no_response"
+
+
+class AutoMode(str, Enum):
+    """レジスタ値の自動変化（Holding/Input Register のみ対応）。"""
+
+    NONE = "none"
+    INCREMENT = "increment"
+    RANDOM_WALK = "random_walk"
+    SINE = "sine"
+
+
 BAUD_RATES = (9600, 19200, 38400, 115200)
 # 先頭がデフォルト表示になる（仕様既定: 8 data bits）
 DATA_BITS = (8, 7)

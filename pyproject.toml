@@ -10,6 +10,9 @@ dependencies = [
     "pyserial>=3.5",
 ]
 
+[project.optional-dependencies]
+build = ["pyinstaller>=6.0"]
+
 [project.scripts]
 modbus-sim = "main:main"
 

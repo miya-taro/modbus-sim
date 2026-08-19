@@ -41,6 +41,9 @@ TAB_TCP_SLAVE = 1
 TAB_RTU_SLAVE = 2
 TAB_LOG = 3
 
+_POLL_INTERVAL_MS = 500
+_POLL_INTERVAL_SEC = _POLL_INTERVAL_MS / 1000
+
 
 async def _prebuild_sim_devices() -> None:
     await asyncio.to_thread(tcp_registry.build_sim_devices)
@@ -106,7 +109,7 @@ class MainWindow(QMainWindow):
             on_rtu_state_change=lambda running: self._bridge.rtu_state_changed.emit(running),
             on_tcp_client_count_change=lambda n: self._bridge.tcp_client_count_changed.emit(n),
         )
-        self.log_panel._on_clear = lambda: self.server_manager.log_buffer.clear()
+        self.log_panel._on_clear = self.server_manager.clear_log
 
         self._save_timer = QTimer(self)
         self._save_timer.setSingleShot(True)
@@ -162,7 +165,7 @@ class MainWindow(QMainWindow):
 
         self._poll_timer = QTimer(self)
         self._poll_timer.timeout.connect(self._poll_ui)
-        self._poll_timer.start(500)
+        self._poll_timer.start(_POLL_INTERVAL_MS)
 
         self._update_grid_enabled()
         self.settings_panel.update_summary()
@@ -334,17 +337,22 @@ class MainWindow(QMainWindow):
 
     def _poll_ui(self) -> None:
         index = self.tabs.currentIndex()
+        # 自動変化は表示中タブに関わらず両レジストリを進める
+        # （マスタから見えるデータは、そのタブを表示しているかどうかに関係なく動き続けるべきため）。
+        # UI 再描画（テーブル再構築）は表示中タブのみに限定してコストを抑える。
+        tcp_auto_changed = tcp_registry.tick_auto_values(_POLL_INTERVAL_SEC)
+        rtu_auto_changed = rtu_registry.tick_auto_values(_POLL_INTERVAL_SEC)
         if index == TAB_TCP_SLAVE:
-            self.tcp_slave_panel.refresh_from_server()
+            self.tcp_slave_panel.refresh_from_server(force=tcp_auto_changed)
         elif index == TAB_RTU_SLAVE:
-            self.rtu_slave_panel.refresh_from_server()
+            self.rtu_slave_panel.refresh_from_server(force=rtu_auto_changed)
         self.tcp_slave_panel.refresh_activity(self.server_manager.tcp_running)
         self.rtu_slave_panel.refresh_activity(self.server_manager.rtu_running)
 
         logs = list(self.server_manager.log_buffer)
         if self._log_dirty or len(logs) != self._last_log_count:
             self._log_dirty = False
-            self.log_panel.set_lines(logs)
+            self.log_panel.set_lines(logs, total_count=self.server_manager.total_log_count)
             self._last_log_count = len(logs)
 
     def closeEvent(self, event) -> None:  # noqa: N802
