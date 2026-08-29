@@ -5,9 +5,12 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import json
+import logging
 from dataclasses import replace
 from pathlib import Path
 from typing import Any
+
+log = logging.getLogger(__name__)
 
 from fastapi import Body, FastAPI, HTTPException, Query, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
@@ -111,13 +114,22 @@ def _apply_point_body(existing: RegisterPoint | None, body: PointBody) -> Regist
     if body.tag is not None:
         point.tag = body.tag.strip()
     if body.decoded is not None:
-        point.raw = parse_decoded_input(body.decoded, datatype)
+        try:
+            point.raw = parse_decoded_input(body.decoded, datatype)
+        except ValueError as exc:
+            raise HTTPException(400, str(exc)) from exc
     elif body.raw is not None:
-        point.raw = (
-            parse_raw_input(body.raw, datatype)
-            if isinstance(body.raw, str)
-            else (float(body.raw) if datatype.is_float else int(body.raw))
-        )
+        if isinstance(body.raw, str):
+            try:
+                point.raw = parse_raw_input(body.raw, datatype)
+            except ValueError as exc:
+                raise HTTPException(400, str(exc)) from exc
+        elif datatype.is_float:
+            point.raw = float(body.raw)
+        elif float(body.raw).is_integer():
+            point.raw = int(body.raw)
+        else:
+            raise HTTPException(400, f"{datatype.value} には整数を指定してください")
 
     if body.fault_mode is not None:
         point.fault_mode = FaultMode(body.fault_mode)
@@ -157,36 +169,24 @@ def create_app(settings_path: Path | None = None) -> FastAPI:
     hub = Hub()
 
     async def poller() -> None:
+        dt = AppState.POLL_INTERVAL_SEC
         while True:
-            await asyncio.sleep(AppState.POLL_INTERVAL_SEC)
+            await asyncio.sleep(dt)
             try:
-                dt = AppState.POLL_INTERVAL_SEC
                 auto_tcp = state.tcp_registry.tick_auto_values(dt)
                 auto_rtu = state.rtu_registry.tick_auto_values(dt)
                 synced = (
                     state.tcp_registry.sync_from_server()
                     | state.rtu_registry.sync_from_server()
                 )
-                dirty = state.take_dirty()
-                msg: dict[str, Any] = {"type": "tick"}
-                if "server_state" in dirty:
-                    msg["server"] = state.server_state()
-                msg["activity"] = state.activity_snapshot()
-                if auto_tcp or synced:
-                    msg["tcp_points"] = state._mode_state("tcp")
-                if auto_rtu or synced:
-                    msg["rtu_points"] = state._mode_state("rtu")
-                if "log" in dirty or state.manager.total_log_count != state._last_log_count:
-                    state._last_log_count = state.manager.total_log_count
-                    msg["log"] = {
-                        "lines": state.log_lines(),
-                        "total_count": state.manager.total_log_count,
-                    }
-                await hub.broadcast(msg)
+                await hub.broadcast(
+                    state.build_tick(
+                        points_tcp=auto_tcp or synced,
+                        points_rtu=auto_rtu or synced,
+                    )
+                )
             except Exception:  # noqa: BLE001 - poller は落とさない
-                import traceback
-
-                traceback.print_exc()
+                log.exception("poller tick failed")
 
     @contextlib.asynccontextmanager
     async def lifespan(_app: FastAPI):
@@ -451,9 +451,8 @@ def create_app(settings_path: Path | None = None) -> FastAPI:
 
     @app.post("/api/log/clear")
     async def clear_log() -> dict:
-        state.manager.clear_log()
-        state._last_log_count = 0
-        await hub.broadcast({"type": "tick", "log": {"lines": [], "total_count": 0}})
+        state.clear_log()
+        await hub.broadcast({"type": "tick", "log": state.log_payload()})
         return {"ok": True}
 
     # --- websocket -------------------------------------------

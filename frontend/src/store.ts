@@ -115,8 +115,13 @@ export const useStore = create<State>((set, get) => ({
       const patch: Partial<State> = {};
       if (msg.server) patch.server = msg.server;
       if (msg.log) patch.log = msg.log;
-      if (msg.tcp_points) patch.tcp = msg.tcp_points;
-      if (msg.rtu_points) patch.rtu = msg.rtu_points;
+      // tick の *_points は選択中スレーブ分しか含まないので points はマージする
+      const mergePoints = (prev: ModeState, next: ModeState): ModeState => ({
+        ...next,
+        points: { ...prev.points, ...next.points },
+      });
+      if (msg.tcp_points) patch.tcp = mergePoints(get().tcp, msg.tcp_points);
+      if (msg.rtu_points) patch.rtu = mergePoints(get().rtu, msg.rtu_points);
       if (msg.activity) {
         const bump = (ms: ModeState): ModeState => ({
           ...ms,
@@ -128,7 +133,7 @@ export const useStore = create<State>((set, get) => ({
         patch.tcp = bump(patch.tcp ?? get().tcp);
         patch.rtu = bump(patch.rtu ?? get().rtu);
       }
-      if (Object.keys(patch).length) set(patch as State);
+      if (Object.keys(patch).length) set(patch);
     };
   },
 }));

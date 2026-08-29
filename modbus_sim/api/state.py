@@ -201,23 +201,49 @@ class AppState:
     def log_lines(self) -> list[str]:
         return list(self.manager.log_buffer)
 
+    def clear_log(self) -> None:
+        self.manager.clear_log()
+        self._last_log_count = 0
+
     def full_state(self) -> dict:
         return {
             "type": "state",
             "server": self.server_state(),
             "settings": comm_to_dict(self.comm),
-            "tcp": self._mode_state("tcp"),
-            "rtu": self._mode_state("rtu"),
+            "tcp": self.mode_state("tcp"),
+            "rtu": self.mode_state("rtu"),
             "log": {
                 "lines": self.log_lines(),
                 "total_count": self.manager.total_log_count,
             },
         }
 
-    def _mode_state(self, mode: str) -> dict:
+    def mode_state(self, mode: str, *, all_slaves: bool = True) -> dict:
+        """1 モード分のスナップショット。
+
+        all_slaves=False のときは選択中スレーブの points のみ含める
+        （フロントは選択中しか描画しないので tick では送信量を抑える）。
+        """
         reg = self.registry(mode)
         snap = self.slaves_snapshot(mode)
-        snap["points"] = {
-            str(sid): self.points_snapshot(mode, sid) for sid in reg.list_slave_ids()
-        }
+        ids = reg.list_slave_ids() if all_slaves else [reg.selected_slave_id]
+        snap["points"] = {str(sid): self.points_snapshot(mode, sid) for sid in ids}
         return snap
+
+    def log_payload(self) -> dict:
+        return {"lines": self.log_lines(), "total_count": self.manager.total_log_count}
+
+    def build_tick(self, *, points_tcp: bool, points_rtu: bool) -> dict:
+        """WebSocket の tick メッセージを組み立てる（差分のみ）。"""
+        dirty = self.take_dirty()
+        msg: dict = {"type": "tick", "activity": self.activity_snapshot()}
+        if "server_state" in dirty:
+            msg["server"] = self.server_state()
+        if points_tcp:
+            msg["tcp_points"] = self.mode_state("tcp", all_slaves=False)
+        if points_rtu:
+            msg["rtu_points"] = self.mode_state("rtu", all_slaves=False)
+        if "log" in dirty or self.manager.total_log_count != self._last_log_count:
+            self._last_log_count = self.manager.total_log_count
+            msg["log"] = self.log_payload()
+        return msg
