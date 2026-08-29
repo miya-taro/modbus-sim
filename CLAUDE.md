@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## What this is
 
-A desktop app that simulates **Modbus TCP and RTU slaves simultaneously**, for developing/testing Modbus masters. TCP and RTU slave data are fully isolated even when Slave IDs collide.
+A desktop app that simulates **Modbus TCP and RTU slaves simultaneously**, for developing/testing Modbus masters. TCP and RTU slave data are fully isolated even when Slave IDs collide. It can also act as a **Modbus master/client** (`modbus_sim/master.py`, "マスター" tab): one connection at a time, FC 1–6/15/16, reads decoded per datatype + word order, optional repeating poll. `/api/master/*` routes; `ModbusMaster` runs on the same asyncio loop.
 
 **UI migration in progress (see `doc/tauri移行計画.md`).** The PySide6 GUI has been removed. The app is now:
 
