@@ -55,11 +55,17 @@ _INPUT_FAULT_FC = 4
 
 
 def datatype_bounds(datatype: ValueKind) -> tuple[int, int]:
-    """レジスタ datatype が表現できる raw 値の範囲 (min, max)。"""
+    """レジスタ datatype が表現できる raw 値の範囲 (min, max)。
+
+    float32 の真の範囲は非常に広く自動変化の下限/上限スピンボックスとして
+    扱いづらいため、実用的な整数レンジに丸めて返す。
+    """
     if datatype == ValueKind.INT16:
         return -32768, 32767
     if datatype == ValueKind.INT32:
         return -2147483648, 2147483647
+    if datatype in (ValueKind.FLOAT32, ValueKind.FLOAT64):
+        return -1_000_000, 1_000_000
     if datatype == ValueKind.BOOL:
         return 0, 1
     return 0, 65535
@@ -84,12 +90,14 @@ def _write_register_point_to_block(
         return
     start_address, register_count, registers, _flags = block
     offset = point.address - start_address
-    if point.datatype == ValueKind.INT32:
-        if 0 <= offset < register_count - 1:
+    span = point.datatype.register_span
+    if span == 1:
+        if 0 <= offset < register_count:
             registers[offset] = memory[point.address]
-            registers[offset + 1] = memory[point.address + 1]
-    elif 0 <= offset < register_count:
-        registers[offset] = memory[point.address]
+        return
+    if 0 <= offset and offset + span <= register_count:
+        for i in range(span):
+            registers[offset + i] = memory[point.address + i]
 
 
 class SlaveDatastore:
@@ -155,6 +163,11 @@ class SlaveDatastore:
         memory = self._memory(kind)
         return memory[address]
 
+    def _memory_words(self, point: RegisterPoint) -> list[int]:
+        """point が占有する連続レジスタの符号なしワード列を返す。"""
+        memory = self._memory(point.kind)
+        return [int(memory[point.address + i]) for i in range(point.datatype.register_span)]
+
     def _all_blocks(self) -> list[BlockMap]:
         return [blocks for _runtime, blocks in self._bindings]
 
@@ -175,6 +188,15 @@ class SlaveDatastore:
             hi, lo = struct.unpack(">HH", packed)
             memory[point.address] = hi
             memory[point.address + 1] = lo
+        elif point.datatype == ValueKind.FLOAT32:
+            packed = struct.pack(">f", float(point.raw))
+            hi, lo = struct.unpack(">HH", packed)
+            memory[point.address] = hi
+            memory[point.address + 1] = lo
+        elif point.datatype == ValueKind.FLOAT64:
+            words = struct.unpack(">HHHH", struct.pack(">d", float(point.raw)))
+            for i, word in enumerate(words):
+                memory[point.address + i] = word
         else:
             value = int(point.raw)
             if point.datatype == ValueKind.INT16 and value < 0:
@@ -191,16 +213,11 @@ class SlaveDatastore:
         for point in self.points.values():
             if point.kind in (RegisterKind.COIL, RegisterKind.DISCRETE_INPUT):
                 latest = int(bool(self.read_raw(point.kind, point.address)))
-            elif point.datatype == ValueKind.INT32 and point.kind in (
+            elif point.datatype.register_span >= 2 and point.kind in (
                 RegisterKind.HOLDING_REGISTER,
                 RegisterKind.INPUT_REGISTER,
             ):
-                memory = self._memory(point.kind)
-                latest = raw_from_memory(
-                    point,
-                    hi=int(memory[point.address]),
-                    lo=int(memory[point.address + 1]),
-                )
+                latest = raw_from_memory(point, words=self._memory_words(point))
             else:
                 latest = raw_from_memory(
                     point, hi=int(self.read_raw(point.kind, point.address))
@@ -318,11 +335,11 @@ class SlaveDatastore:
             if key not in self.points:
                 continue
             point = self.points[key]
-            if point.datatype == ValueKind.INT32:
+            if point.datatype.register_span >= 2:
                 memory = self._memory(kind)
-                point.raw = raw_from_memory(
-                    point, hi=int(memory[index]), lo=int(memory[index + 1])
-                )
+                span = point.datatype.register_span
+                words = [int(memory[index + i]) for i in range(span)]
+                point.raw = raw_from_memory(point, words=words)
             else:
                 point.raw = raw_from_memory(point, hi=int(self.read_raw(kind, index)))
 
@@ -494,12 +511,21 @@ class SlaveRegistry:
                     if not isinstance(point_data, dict):
                         continue
                     try:
+                        datatype = ValueKind(
+                            point_data.get("datatype", ValueKind.UINT16.value)
+                        )
+                        raw_value = point_data.get("raw", 0)
+                        raw = (
+                            float(raw_value)
+                            if datatype.is_float
+                            else int(raw_value)
+                        )
                         point = RegisterPoint(
                             address=int(point_data["address"]),
                             kind=RegisterKind(point_data.get("kind", RegisterKind.HOLDING_REGISTER.value)),
-                            datatype=ValueKind(point_data.get("datatype", ValueKind.UINT16.value)),
+                            datatype=datatype,
                             tag=str(point_data.get("tag", "")),
-                            raw=int(point_data.get("raw", 0)),
+                            raw=raw,
                         )
                         if "fault_mode" in point_data:
                             point.fault_mode = FaultMode(point_data["fault_mode"])
@@ -549,11 +575,17 @@ def _next_auto_value(point: RegisterPoint, dt: float) -> int | None:
     if period <= 0:
         return None
 
+    # float32 / float64 は小数のまま進め、整数型は従来どおり丸める。
+    is_float = point.datatype.is_float
+
+    def _quantize(value: float) -> int | float:
+        return value if is_float else int(round(value))
+
     if point.auto_mode == AutoMode.SINE:
         point.auto_phase = (point.auto_phase + dt) % period
         span = auto_max - auto_min
         value = auto_min + span * (0.5 + 0.5 * math.sin(2 * math.pi * point.auto_phase / period))
-        return int(round(value))
+        return _quantize(value)
 
     # INCREMENT / RANDOM_WALK は auto_period_sec ごとに 1 ステップ進める
     point.auto_phase += dt
@@ -563,13 +595,14 @@ def _next_auto_value(point: RegisterPoint, dt: float) -> int | None:
 
     if point.auto_mode == AutoMode.INCREMENT:
         span = auto_max - auto_min + 1
-        step = int(round(point.auto_step)) or 1  # 0 は「実質無変化」で分かりにくいため 1 扱い
+        # 0 は「実質無変化」で分かりにくいため 1 扱い
+        step = (point.auto_step if is_float else int(round(point.auto_step))) or 1
         return auto_min + ((point.raw - auto_min) + step) % span
 
     if point.auto_mode == AutoMode.RANDOM_WALK:
         step = abs(point.auto_step) or 1.0
         delta = random.uniform(-step, step)
-        return max(auto_min, min(auto_max, int(round(point.raw + delta))))
+        return max(auto_min, min(auto_max, _quantize(point.raw + delta)))
 
     return None
 
@@ -577,8 +610,11 @@ def _next_auto_value(point: RegisterPoint, dt: float) -> int | None:
 def validate_address(address: int, datatype: ValueKind) -> None:
     if not 0 <= address < REGISTER_COUNT:
         raise ValueError(f"Addr は 0-{REGISTER_COUNT - 1} です")
-    if datatype == ValueKind.INT32 and address + 1 >= REGISTER_COUNT:
-        raise ValueError(f"int32 は Addr が {REGISTER_COUNT - 2} 以下である必要があります")
+    span = datatype.register_span
+    if span >= 2 and address + span - 1 >= REGISTER_COUNT:
+        raise ValueError(
+            f"{datatype.value} は Addr が {REGISTER_COUNT - span} 以下である必要があります"
+        )
 
 
 def _sync_bits_to_registers(bits: list[bool], registers: list[int], block_start: int = 0) -> None:
@@ -592,7 +628,7 @@ def _sync_bits_to_registers(bits: list[bool], registers: list[int], block_start:
             registers[index] = packed[source_index]
 
 
-def decode_value(point: RegisterPoint) -> str | int | bool:
+def decode_value(point: RegisterPoint) -> str | int | float | bool:
     if point.kind in (RegisterKind.COIL, RegisterKind.DISCRETE_INPUT):
         return bool(point.raw)
     if point.datatype == ValueKind.UINT16:
@@ -602,28 +638,65 @@ def decode_value(point: RegisterPoint) -> str | int | bool:
         return value - 0x10000 if value >= 0x8000 else value
     if point.datatype == ValueKind.INT32:
         return int(point.raw)
+    if point.datatype == ValueKind.FLOAT32:
+        # 32bit 精度に丸めた値を返す（例: 3.14 は正確には保持できない）
+        return struct.unpack(">f", struct.pack(">f", float(point.raw)))[0]
+    if point.datatype == ValueKind.FLOAT64:
+        return float(point.raw)
     return point.raw
 
 
-def raw_from_memory(point: RegisterPoint, *, hi: int | None = None, lo: int | None = None) -> int:
-    """メモリ上の符号なし値を、point.datatype に合わせた raw に変換する。"""
+def _float32_bits(raw: int | float) -> int:
+    """float を IEEE754 単精度の 32bit 符号なし整数へ。"""
+    return struct.unpack(">I", struct.pack(">f", float(raw)))[0]
+
+
+def _float64_bits(raw: int | float) -> int:
+    """float を IEEE754 倍精度の 64bit 符号なし整数へ。"""
+    return struct.unpack(">Q", struct.pack(">d", float(raw)))[0]
+
+
+def raw_from_memory(
+    point: RegisterPoint,
+    *,
+    hi: int | None = None,
+    lo: int | None = None,
+    words: list[int] | None = None,
+) -> int | float:
+    """メモリ上の符号なし値を、point.datatype に合わせた raw に変換する。
+
+    2 レジスタ型は hi/lo、または words=[hi, lo] を渡す。
+    float64 は words=[w0, w1, w2, w3]（ビッグエンディアン）で渡す。
+    """
     if point.kind in (RegisterKind.COIL, RegisterKind.DISCRETE_INPUT):
-        return int(bool(hi if hi is not None else 0))
+        base = words[0] if words else hi
+        return int(bool(base if base is not None else 0))
+    if words is None:
+        words = [w for w in (hi, lo) if w is not None]
+    words = [int(w) & 0xFFFF for w in words]
     if point.datatype == ValueKind.INT32:
-        assert hi is not None and lo is not None
-        return struct.unpack(">i", struct.pack(">HH", hi & 0xFFFF, lo & 0xFFFF))[0]
-    value = int(hi if hi is not None else 0) & 0xFFFF
+        return struct.unpack(">i", struct.pack(">HH", words[0], words[1]))[0]
+    if point.datatype == ValueKind.FLOAT32:
+        return struct.unpack(">f", struct.pack(">HH", words[0], words[1]))[0]
+    if point.datatype == ValueKind.FLOAT64:
+        return struct.unpack(">d", struct.pack(">HHHH", *words[:4]))[0]
+    value = (words[0] if words else 0) & 0xFFFF
     if point.datatype == ValueKind.INT16:
         return value - 0x10000 if value >= 0x8000 else value
     return value
 
 
-def _raw_values_equal(point: RegisterPoint, latest: int) -> bool:
+def _raw_values_equal(point: RegisterPoint, latest: int | float) -> bool:
     """UI raw とメモリ由来 raw が実質同じか（int16 の -1 と 0xFFFF を同一視）。"""
     if point.datatype == ValueKind.INT16:
         return (int(point.raw) & 0xFFFF) == (int(latest) & 0xFFFF)
     if point.datatype == ValueKind.INT32:
         return (int(point.raw) & 0xFFFFFFFF) == (int(latest) & 0xFFFFFFFF)
+    if point.datatype == ValueKind.FLOAT32:
+        # 32bit へ丸めたビットパターンで比較（NaN 同士も bit 一致で同一視）
+        return _float32_bits(point.raw) == _float32_bits(latest)
+    if point.datatype == ValueKind.FLOAT64:
+        return _float64_bits(point.raw) == _float64_bits(latest)
     if point.kind in (RegisterKind.COIL, RegisterKind.DISCRETE_INPUT):
         return bool(point.raw) == bool(latest)
     return int(point.raw) == int(latest)
@@ -632,6 +705,10 @@ def _raw_values_equal(point: RegisterPoint, latest: int) -> bool:
 def format_decoded_display(point: RegisterPoint) -> str:
     if point.kind in (RegisterKind.COIL, RegisterKind.DISCRETE_INPUT):
         return f"0x{int(bool(point.raw)):02X}"
+    if point.datatype == ValueKind.FLOAT32:
+        return f"0x{_float32_bits(point.raw):08X}"
+    if point.datatype == ValueKind.FLOAT64:
+        return f"0x{_float64_bits(point.raw):016X}"
     if point.datatype == ValueKind.INT32:
         value = int(point.raw) & 0xFFFFFFFF
         return f"0x{value:08X}"
@@ -639,10 +716,10 @@ def format_decoded_display(point: RegisterPoint) -> str:
     return f"0x{value:04X}"
 
 
-def parse_decoded_input(value: str, datatype: ValueKind) -> int:
+def parse_decoded_input(value: str, datatype: ValueKind) -> int | float:
     text = value.strip()
     if not text:
-        return 0
+        return 0.0 if datatype == ValueKind.FLOAT32 else 0
     if text.lower().startswith("0x"):
         parsed = int(text, 16)
     elif len(text) > 1 and text[-1].lower() == "h":
@@ -657,11 +734,26 @@ def parse_decoded_input(value: str, datatype: ValueKind) -> int:
         return parsed & 0xFFFF
     if datatype == ValueKind.INT16:
         return parsed & 0xFFFF
+    if datatype == ValueKind.FLOAT32:
+        # Decoded 欄は IEEE754 のビットパターン。float 値へ復元する。
+        return struct.unpack(">f", struct.pack(">I", parsed & 0xFFFFFFFF))[0]
+    if datatype == ValueKind.FLOAT64:
+        return struct.unpack(">d", struct.pack(">Q", parsed & 0xFFFFFFFFFFFFFFFF))[0]
     # INT32: struct.pack(">i") 向けに符号付きへ正規化（例: FFFFFFFF → -1）
     value32 = parsed & 0xFFFFFFFF
     if value32 >= 0x80000000:
         value32 -= 0x100000000
     return value32
+
+
+def parse_raw_input(value: str, datatype: ValueKind) -> int | float:
+    """Raw 列の入力文字列を datatype に応じた数値へ。float32 のみ小数を受け付ける。"""
+    text = value.strip()
+    if not text:
+        return 0.0 if datatype == ValueKind.FLOAT32 else 0
+    if datatype.is_float:
+        return float(text)
+    return int(text)
 
 
 registry = SlaveRegistry()  # 後方互換（TCP と同一）

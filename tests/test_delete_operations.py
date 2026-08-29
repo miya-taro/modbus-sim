@@ -1,29 +1,16 @@
-"""レジスタ行 / Slave の削除操作に関するテスト。"""
+"""レジスタ点 / Slave の削除操作に関するテスト（datastore レベル）。
+
+UI 経由の削除メニュー・エラーセル表示・ショートカットのテストは Tauri フロント側
+（vitest / Playwright）へ移行。ここではコアの不変条件のみを検証する。
+"""
 
 from __future__ import annotations
 
-import sys
-
 import pytest
-from PySide6.QtWidgets import QApplication, QMessageBox
 
 from modbus_sim.config import RegisterKind, ValueKind
 from modbus_sim.datastore import SlaveDatastore, SlaveRegistry
 from modbus_sim.models import RegisterPoint
-from modbus_sim.ui.slave_panel import ADDR_COL, SlavePanel
-
-
-@pytest.fixture
-def qapp() -> QApplication:
-    return QApplication.instance() or QApplication(sys.argv)
-
-
-def _row_for_address(panel: SlavePanel, address: int) -> int:
-    for row in range(panel.table.rowCount()):
-        item = panel.table.item(row, ADDR_COL)
-        if item is not None and item.text() == str(address):
-            return row
-    raise AssertionError(f"address {address} not found in grid")
 
 
 class TestSlaveDatastoreRemovePoint:
@@ -79,113 +66,3 @@ class TestSlaveRegistryRemoveSlave:
         reg.selected_slave_id = 2
         reg.remove_slave(2)
         assert reg.selected_slave_id == 1
-
-
-class TestSlavePanelDeleteUI:
-    def test_delete_row_via_menu_removes_point(self, qapp: QApplication, monkeypatch) -> None:
-        monkeypatch.setattr(QMessageBox, "question", lambda *a, **k: QMessageBox.StandardButton.Yes)
-        reg = SlaveRegistry()
-        panel = SlavePanel(slave_registry=reg)
-        panel.table.item(panel.table.rowCount() - 1, ADDR_COL).setText("50")
-        row = _row_for_address(panel, 50)
-        assert reg.get_slave(1).get_point(50, RegisterKind.HOLDING_REGISTER) is not None
-
-        panel._delete_rows([row])
-
-        assert reg.get_slave(1).get_point(50, RegisterKind.HOLDING_REGISTER) is None
-
-    def test_delete_row_cancelled_keeps_point(self, qapp: QApplication, monkeypatch) -> None:
-        monkeypatch.setattr(QMessageBox, "question", lambda *a, **k: QMessageBox.StandardButton.No)
-        reg = SlaveRegistry()
-        panel = SlavePanel(slave_registry=reg)
-        panel.table.item(panel.table.rowCount() - 1, ADDR_COL).setText("50")
-        row = _row_for_address(panel, 50)
-
-        panel._delete_rows([row])
-
-        assert reg.get_slave(1).get_point(50, RegisterKind.HOLDING_REGISTER) is not None
-
-    def test_draft_row_is_not_deletable(self, qapp: QApplication, monkeypatch) -> None:
-        monkeypatch.setattr(QMessageBox, "question", lambda *a, **k: QMessageBox.StandardButton.Yes)
-        reg = SlaveRegistry()
-        panel = SlavePanel(slave_registry=reg)
-        draft_row = panel.table.rowCount() - 1
-        assert panel._selected_data_rows() == [] or draft_row not in panel._selected_data_rows()
-
-    def test_remove_slave_button_disabled_with_single_slave(self, qapp: QApplication) -> None:
-        reg = SlaveRegistry()
-        panel = SlavePanel(slave_registry=reg)
-        assert panel.remove_slave_button.isEnabled() is False
-
-    def test_remove_slave_button_enabled_with_multiple_slaves(self, qapp: QApplication) -> None:
-        reg = SlaveRegistry()
-        reg.add_slave(2)
-        panel = SlavePanel(slave_registry=reg)
-        assert panel.remove_slave_button.isEnabled() is True
-
-    def test_remove_slave_removes_selected(self, qapp: QApplication, monkeypatch) -> None:
-        monkeypatch.setattr(QMessageBox, "question", lambda *a, **k: QMessageBox.StandardButton.Yes)
-        reg = SlaveRegistry()
-        reg.add_slave(2)
-        panel = SlavePanel(slave_registry=reg)
-        reg.selected_slave_id = 2
-        panel._registry.selected_slave_id = 2
-
-        panel._remove_slave()
-
-        assert reg.list_slave_ids() == [1]
-
-    def test_remove_slave_cancelled_keeps_slave(self, qapp: QApplication, monkeypatch) -> None:
-        monkeypatch.setattr(QMessageBox, "question", lambda *a, **k: QMessageBox.StandardButton.No)
-        reg = SlaveRegistry()
-        reg.add_slave(2)
-        panel = SlavePanel(slave_registry=reg)
-        panel._registry.selected_slave_id = 2
-
-        panel._remove_slave()
-
-        assert reg.list_slave_ids() == [1, 2]
-
-
-class TestErrorCellFeedback:
-    def test_invalid_address_marks_cell_with_tooltip(self, qapp: QApplication) -> None:
-        reg = SlaveRegistry()
-        panel = SlavePanel(slave_registry=reg)
-        row = panel.table.rowCount() - 1
-        panel.table.item(row, ADDR_COL).setText("999999")
-
-        item = panel.table.item(row, ADDR_COL)
-        assert item.toolTip() != ""
-
-    def test_valid_address_clears_previous_error_mark(self, qapp: QApplication) -> None:
-        reg = SlaveRegistry()
-        panel = SlavePanel(slave_registry=reg)
-        row = panel.table.rowCount() - 1
-        panel.table.item(row, ADDR_COL).setText("999999")
-        assert panel.table.item(row, ADDR_COL).toolTip() != ""
-
-        panel.table.item(row, ADDR_COL).setText("50")
-        row = _row_for_address(panel, 50)
-        assert panel.table.item(row, ADDR_COL).toolTip() == ""
-
-
-class TestKeyboardShortcuts:
-    def test_panel_has_no_event_filter_override(self, qapp: QApplication) -> None:
-        """eventFilter 再帰クラッシュ回避のため、ショートカット方式であること。"""
-        panel = SlavePanel(slave_registry=SlaveRegistry())
-        assert "eventFilter" not in type(panel).__dict__
-        assert hasattr(panel, "_shortcut_copy")
-        assert hasattr(panel, "_shortcut_delete_rows")
-
-    def test_shortcut_delete_removes_selected_row(
-        self, qapp: QApplication, monkeypatch
-    ) -> None:
-        monkeypatch.setattr(QMessageBox, "question", lambda *a, **k: QMessageBox.StandardButton.Yes)
-        reg = SlaveRegistry()
-        panel = SlavePanel(slave_registry=reg)
-        panel.table.item(panel.table.rowCount() - 1, ADDR_COL).setText("50")
-        row = _row_for_address(panel, 50)
-        panel.table.selectRow(row)
-
-        panel._shortcut_delete_rows()
-        assert reg.get_slave(1).get_point(50, RegisterKind.HOLDING_REGISTER) is None

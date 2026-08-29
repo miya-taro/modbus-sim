@@ -1,0 +1,19 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "default",
+  "description": "デフォルト権限 + バックエンドサイドカーの起動",
+  "windows": ["main"],
+  "permissions": [
+    "core:default",
+    {
+      "identifier": "shell:allow-execute",
+      "allow": [
+        {
+          "name": "binaries/modbus-sim-backend",
+          "sidecar": true,
+          "args": true
+        }
+      ]
+    }
+  ]
+}

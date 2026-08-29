@@ -58,6 +58,13 @@ junit.xml
 dmypy.json
 .dmypy.json
 
+# Node / frontend / Tauri
+node_modules/
+frontend/dist/
+src-tauri/target/
+src-tauri/gen/
+src-tauri/binaries/
+
 # IDE / editor
 .idea/
 .vscode/

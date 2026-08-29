@@ -6,9 +6,8 @@ import struct
 from itertools import count
 
 import pytest
-from PySide6.QtWidgets import QApplication
 
-from modbus_sim.config import REGISTER_COUNT, RegisterKind, TcpConfig, ValueKind
+from modbus_sim.config import REGISTER_COUNT, Parity, RegisterKind, RtuConfig, TcpConfig, ValueKind
 from modbus_sim.datastore import (
     SlaveDatastore,
     SlaveRegistry,
@@ -17,9 +16,21 @@ from modbus_sim.datastore import (
     parse_decoded_input,
     validate_address,
 )
-from modbus_sim.models import RegisterPoint
+from modbus_sim.models import CommSettings, RegisterPoint
 from modbus_sim.server_manager import ModbusServerManager
-from modbus_sim.ui.settings_panel import SettingsPanel
+from modbus_sim.settings_model import comm_to_tcp_config
+
+
+def _tcp_comm(host: str, port: str | int) -> CommSettings:
+    comm = CommSettings()
+    comm.tcp_host = host
+    comm.mark("tcp_host")
+    try:
+        comm.tcp_port = int(port)
+    except (TypeError, ValueError):
+        comm.tcp_port = port  # type: ignore[assignment]
+    comm.mark("tcp_port")
+    return comm
 
 _port = count(16000)
 
@@ -178,69 +189,49 @@ class TestDatatypeHexRoundtrip:
 
 
 class TestTcpPortPolicy:
+    """ポート検証は settings_model.comm_to_tcp_config が担う（旧 SettingsPanel.get_tcp_config）。"""
+
     @pytest.mark.parametrize("port", [1, 22, 80, 443, 502, 1023])
-    def test_privileged_ports_rejected_on_linux(self, port: int, qapp: QApplication) -> None:
+    def test_privileged_ports_rejected_on_linux(self, port: int) -> None:
         from modbus_sim.platform_util import privileged_tcp_ports_restricted
 
         if not privileged_tcp_ports_restricted():
             pytest.skip("privileged port restriction is Linux/WSL only")
-        panel = SettingsPanel()
-        panel.tcp_host.setCurrentText("127.0.0.1")
-        panel.tcp_port.setText(str(port))
         with pytest.raises(ValueError, match="特権ポート"):
-            panel.get_tcp_config()
+            comm_to_tcp_config(_tcp_comm("127.0.0.1", port))
 
     @pytest.mark.parametrize("port", [0, -1, 65536, 99999])
-    def test_invalid_port_numbers_rejected(self, port: int, qapp: QApplication) -> None:
-        panel = SettingsPanel()
-        panel.tcp_host.setCurrentText("127.0.0.1")
-        panel.tcp_port.setText(str(port))
+    def test_invalid_port_numbers_rejected(self, port: int) -> None:
         with pytest.raises(ValueError, match="ポート"):
-            panel.get_tcp_config()
+            comm_to_tcp_config(_tcp_comm("127.0.0.1", port))
 
     @pytest.mark.parametrize("port", [1024, 5020, 15000, 40000, 65535])
-    def test_unprivileged_ports_accepted_by_ui(self, port: int, qapp: QApplication) -> None:
-        panel = SettingsPanel()
-        panel.tcp_host.setCurrentText("127.0.0.1")
-        panel.tcp_port.setText(str(port))
-        config = panel.get_tcp_config()
+    def test_unprivileged_ports_accepted(self, port: int) -> None:
+        config = comm_to_tcp_config(_tcp_comm("127.0.0.1", port))
         assert config.port == port
 
-    def test_port_502_allowed_when_not_restricted(self, qapp: QApplication, monkeypatch) -> None:
+    def test_port_502_allowed_when_not_restricted(self, monkeypatch) -> None:
         monkeypatch.setattr(
             "modbus_sim.platform_util.privileged_tcp_ports_restricted",
             lambda: False,
         )
-        panel = SettingsPanel()
-        panel.tcp_host.setCurrentText("127.0.0.1")
-        panel.tcp_port.setText("502")
-        assert panel.get_tcp_config().port == 502
+        assert comm_to_tcp_config(_tcp_comm("127.0.0.1", 502)).port == 502
+
+    def test_missing_host_rejected(self) -> None:
+        comm = CommSettings()
+        comm.tcp_port = 5020
+        comm.mark("tcp_port")
+        with pytest.raises(ValueError, match="IP アドレス"):
+            comm_to_tcp_config(comm)
 
 
 class TestRtuDefaults:
-    def test_default_rtu_framing_matches_spec(self, qapp: QApplication) -> None:
-        panel = SettingsPanel()
-        assert panel.rtu_baudrate.currentText() == "9600"
-        assert panel.rtu_parity.currentText() == "Even"
-        assert panel.rtu_bytesize.currentText() == "8"
-        assert panel.rtu_stopbits.currentText() == "1"
-
-    def test_no_fake_serial_when_none_detected(self, qapp: QApplication, monkeypatch) -> None:
-        monkeypatch.setattr(
-            "modbus_sim.ui.settings_panel.list_ports.comports",
-            lambda: [],
-        )
-        panel = SettingsPanel()
-        assert panel.rtu_port.count() == 0
-        assert panel.rtu_port.currentText() == ""
-
-
-@pytest.fixture(scope="module")
-def qapp() -> QApplication:
-    app = QApplication.instance()
-    if app is None:
-        app = QApplication([])
-    return app
+    def test_default_rtu_framing_matches_spec(self) -> None:
+        config = RtuConfig()
+        assert config.baudrate == 9600
+        assert config.parity == Parity.EVEN
+        assert config.bytesize == 8
+        assert config.stopbits == 1
 
 
 # ---------------------------------------------------------------------------

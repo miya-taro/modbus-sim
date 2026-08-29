@@ -1,0 +1,6 @@
+# Rust build output
+/target/
+/gen/schemas/
+
+# 同梱するサイドカーバイナリ（各 OS で pyinstaller により生成する）
+/binaries/

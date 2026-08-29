@@ -13,7 +13,8 @@ class RegisterPoint:
     kind: RegisterKind = RegisterKind.HOLDING_REGISTER
     datatype: ValueKind = ValueKind.UINT16
     tag: str = ""
-    raw: int = 0
+    # float32 のときだけ float、それ以外は int。
+    raw: int | float = 0
 
     # 異常応答シミュレーション（Holding/Input Register のみ）
     fault_mode: FaultMode = FaultMode.NONE

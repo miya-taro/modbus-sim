@@ -1,13 +1,11 @@
-"""Modbus TCP/RTU simulator entry point."""
+"""Modbus TCP/RTU simulator entry point.
 
-import sys
+UI は Tauri（Rust シェル + React フロント）へ移行済み。このエントリは
+バックエンド（FastAPI + WebSocket）を起動する。Tauri がサイドカーとして呼ぶ。
+単体でも `python main.py --port 8000` として起動し、ブラウザから利用できる。
+"""
 
-from modbus_sim.ui.app import create_app
-
-
-def main() -> None:
-    sys.exit(create_app())
-
+from modbus_sim.__main__ import main
 
 if __name__ == "__main__":
-    main()
+    raise SystemExit(main())

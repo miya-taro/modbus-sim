@@ -1,6 +1,13 @@
 # Modbus TCP/RTU シミュレータ
 
-Modbus 通信の開発・テスト向けに、**TCP / RTU スレーブを同時に模擬**できる GUI ツールです。
+Modbus 通信の開発・テスト向けに、**TCP / RTU スレーブを同時に模擬**できるツールです。
+
+> **⚠ UI 移行中**: PySide6 GUI は削除し、**Tauri（Rust シェル）+ React フロント + Python バックエンド（FastAPI）** へ移行中です。
+> - **1コマンドで起動**: `python main.py --open`（バックエンド起動＋ブラウザで UI を開く。初回のみ `cd frontend && npm install && npm run build` が必要）
+> - フロント開発（HMR）: 別端末で `cd frontend && npm run dev` → http://localhost:5173
+> - Tauri シェル（`src-tauri/`）は実装済みだが、ローカルは Smart App Control でビルド不可。CI（`.github/workflows/build-desktop.yml`）でインストーラ生成。詳細と進捗は [`doc/tauri移行計画.md`](doc/tauri移行計画.md) を参照。
+>
+> 以下の GUI 前提の記述は移行完了まで暫定です。
 
 ## 機能
 

@@ -1,0 +1,134 @@
+import { create } from "zustand";
+import { api } from "./api";
+import type {
+  CommSettings,
+  FullState,
+  Mode,
+  ModeState,
+  ServerState,
+  TickMessage,
+} from "./types";
+
+export type TabKey = "settings" | "tcp" | "rtu" | "log";
+
+interface State {
+  connected: boolean;
+  server: ServerState;
+  settings: CommSettings;
+  tcp: ModeState;
+  rtu: ModeState;
+  log: { lines: string[]; total_count: number };
+  error: string | null;
+  activeTab: TabKey;
+  confirmState: { message: string; resolve: (v: boolean) => void } | null;
+
+  setActiveTab: (t: TabKey) => void;
+  setError: (e: string | null) => void;
+  askConfirm: (message: string) => Promise<boolean>;
+  resolveConfirm: (v: boolean) => void;
+  connect: () => void;
+  applyFullState: (s: FullState) => void;
+  refreshMode: (mode: Mode) => Promise<void>;
+  setModeState: (mode: Mode, ms: ModeState) => void;
+  setSettings: (s: CommSettings) => void;
+  setServer: (s: ServerState) => void;
+}
+
+const emptyMode = (mode: Mode): ModeState => ({
+  mode,
+  selected_slave_id: 1,
+  slaves: [{ id: 1, tag: "", activity: "off" }],
+  points: { "1": [] },
+});
+
+let ws: WebSocket | null = null;
+let reconnectTimer: number | undefined;
+
+export const useStore = create<State>((set, get) => ({
+  connected: false,
+  server: { tcp_running: false, rtu_running: false, tcp_client_count: 0 },
+  settings: {},
+  tcp: emptyMode("tcp"),
+  rtu: emptyMode("rtu"),
+  log: { lines: [], total_count: 0 },
+  error: null,
+  activeTab: "settings",
+  confirmState: null,
+
+  setActiveTab: (t) => set({ activeTab: t }),
+  setError: (e) => set({ error: e }),
+  askConfirm: (message) =>
+    new Promise<boolean>((resolve) => set({ confirmState: { message, resolve } })),
+  resolveConfirm: (v) => {
+    const cs = get().confirmState;
+    if (cs) cs.resolve(v);
+    set({ confirmState: null });
+  },
+
+  applyFullState: (s) =>
+    set({
+      server: s.server,
+      settings: s.settings ?? {},
+      tcp: s.tcp,
+      rtu: s.rtu,
+      log: s.log,
+    }),
+
+  setModeState: (mode, ms) => set({ [mode]: ms } as Pick<State, "tcp" | "rtu">),
+  setSettings: (s) => set({ settings: s }),
+  setServer: (s) => set({ server: s }),
+
+  refreshMode: async (mode) => {
+    try {
+      const snap = await api.listSlaves(mode);
+      const pts = await api.listAllPoints(mode, snap.selected_slave_id);
+      set({
+        [mode]: { ...snap, points: { [String(snap.selected_slave_id)]: pts } },
+      } as Pick<State, "tcp" | "rtu">);
+    } catch (e) {
+      set({ error: String((e as Error).message ?? e) });
+    }
+  },
+
+  connect: () => {
+    if (ws && (ws.readyState === WebSocket.OPEN || ws.readyState === WebSocket.CONNECTING)) return;
+    const proto = location.protocol === "https:" ? "wss" : "ws";
+    ws = new WebSocket(`${proto}://${location.host}/ws`);
+
+    ws.onopen = () => {
+      set({ connected: true });
+      // 再同期
+      api.getState().then((s) => get().applyFullState(s)).catch(() => {});
+    };
+    ws.onclose = () => {
+      set({ connected: false });
+      window.clearTimeout(reconnectTimer);
+      reconnectTimer = window.setTimeout(() => get().connect(), 1500);
+    };
+    ws.onerror = () => ws?.close();
+    ws.onmessage = (ev) => {
+      const msg = JSON.parse(ev.data) as FullState | TickMessage;
+      if (msg.type === "state") {
+        get().applyFullState(msg);
+        return;
+      }
+      const patch: Partial<State> = {};
+      if (msg.server) patch.server = msg.server;
+      if (msg.log) patch.log = msg.log;
+      if (msg.tcp_points) patch.tcp = msg.tcp_points;
+      if (msg.rtu_points) patch.rtu = msg.rtu_points;
+      if (msg.activity) {
+        const bump = (ms: ModeState): ModeState => ({
+          ...ms,
+          slaves: ms.slaves.map((sl) => {
+            const a = msg.activity!.find((x) => x.mode === ms.mode && x.slave_id === sl.id);
+            return a ? { ...sl, activity: a.state } : sl;
+          }),
+        });
+        patch.tcp = bump(patch.tcp ?? get().tcp);
+        patch.rtu = bump(patch.rtu ?? get().rtu);
+      }
+      if (Object.keys(patch).length) set(patch as State);
+    };
+  },
+}));

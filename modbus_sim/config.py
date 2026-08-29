@@ -31,7 +31,20 @@ class ValueKind(str, Enum):
     UINT16 = "uint16"
     INT16 = "int16"
     INT32 = "int32"
+    FLOAT32 = "float32"
+    FLOAT64 = "float64"
     BOOL = "bool"
+
+    @property
+    def register_span(self) -> int:
+        """このデータ型が消費するレジスタ数（16bit ワード数）。"""
+        if self == ValueKind.FLOAT64:
+            return 4
+        return 2 if self in (ValueKind.INT32, ValueKind.FLOAT32) else 1
+
+    @property
+    def is_float(self) -> bool:
+        return self in (ValueKind.FLOAT32, ValueKind.FLOAT64)
 
 
 class FaultMode(str, Enum):

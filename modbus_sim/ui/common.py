@@ -1,6 +1,0 @@
-"""Shared UI constants."""
-
-FONT_TITLE = 16
-FONT_SECTION = 13
-FONT_BODY = 12
-FONT_CAPTION = 11
