@@ -81,9 +81,6 @@ export function ScenarioTab() {
           </button>
           <button onClick={() => setText(JSON.stringify(EXAMPLE, null, 2))}>サンプルに戻す</button>
         </div>
-        <p className="hint">
-          CLI: <code>python main.py --scenario path.json</code>（成功で終了コード 0）
-        </p>
       </div>
 
       <div className="card" style={{ margin: 0 }}>

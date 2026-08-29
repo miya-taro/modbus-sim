@@ -475,8 +475,8 @@ frontend vitest 22、build OK。settings.json のキー増分: スレーブご�
 - **シナリオ実行**（`modbus_sim/scenario.py`）: JSON のステップ列（`set_point` /
   `set_word_order` / `set_frame_fault` / `start_server` / `stop_server` /
   `master_connect` / `master_request`＋`expect` / `wait` / `log`）を順に実行。
-  `POST /api/scenario/run`、ヘッドレス `python main.py --scenario f.json`（成功=exit0）、
-  「シナリオ」タブ。`examples/scenario_example.json`。→ CI 回帰ハーネス化。
+  「シナリオ」タブ / `POST /api/scenario/run`。`examples/scenario_example.json`。
+  （CLI ヘッドレス実行は「UI ありきのツール」との方針で削除）
 - テスト: backend 224 passed（test_master 10 / test_scenario 8 追加）、vitest 22。
   タブは6つ（通信設定 / TCP / RTU / マスター / シナリオ / 通信ログ）。
 
