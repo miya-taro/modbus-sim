@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react";
+import { useVirtualizer } from "@tanstack/react-virtual";
 import { api } from "../api";
 import { useStore } from "../store";
 import { datatypeChoicesFor, defaultDatatypeFor } from "../kinds";
@@ -115,8 +116,22 @@ export function RegisterGrid({ mode, slaveId, kind, points, search, wordOrder, o
     }
   };
 
+  const scrollRef = useRef<HTMLDivElement>(null);
+  const rowVirtualizer = useVirtualizer({
+    count: shown.length,
+    getScrollElement: () => scrollRef.current,
+    estimateSize: () => ROW_HEIGHT,
+    overscan: 12,
+  });
+  const virtualItems = rowVirtualizer.getVirtualItems();
+  const padTop = virtualItems.length ? virtualItems[0].start : 0;
+  const padBottom = virtualItems.length
+    ? rowVirtualizer.getTotalSize() - virtualItems[virtualItems.length - 1].end
+    : 0;
+
   return (
-    <div className="grid-wrap">
+    <div className="grid-wrap" ref={scrollRef}>
+      <div className="grid-count muted">{shown.length} 点</div>
       <table className="grid">
         <thead>
           <tr>
@@ -129,64 +144,32 @@ export function RegisterGrid({ mode, slaveId, kind, points, search, wordOrder, o
           </tr>
         </thead>
         <tbody>
-          {shown.map((p) => (
-            <tr key={p.address} className={p.advanced ? "advanced" : ""}>
-              <td>
-                <input value={p.address} readOnly tabIndex={-1} />
-              </td>
-              <td>
-                {isBit ? (
-                  <input
-                    type="checkbox"
-                    checked={!!p.raw}
-                    onChange={(e) => commit(p, { raw: e.target.checked ? 1 : 0 })}
-                  />
-                ) : (
-                  <EditableCell value={String(p.raw)} onCommit={(v) => commitRaw(p, v)} />
-                )}
-              </td>
-              <td>
-                <EditableCell
-                  value={p.decoded_hex}
-                  readOnly={isBit}
-                  onCommit={(v) => commit(p, { decoded: v })}
-                />
-              </td>
-              <td>
-                <select
-                  value={p.datatype}
-                  disabled={isBit}
-                  onChange={(e) => commit(p, { datatype: e.target.value as Datatype })}
-                >
-                  {choices.map((c) => (
-                    <option key={c} value={c}>
-                      {c}
-                    </option>
-                  ))}
-                </select>
-              </td>
-              <td>
-                <EditableCell value={p.tag} onCommit={(v) => commit(p, { tag: v })} />
-              </td>
-              <td className="actions">
-                {!isBit && (
-                  <button
-                    className="cell-btn"
-                    onClick={() => onAdvanced(p)}
-                    title="異常応答/遅延/自動変化"
-                  >
-                    詳細
-                  </button>
-                )}
-                <button className="cell-btn" onClick={() => dup(p)}>
-                  複製
-                </button>
-                <button className="cell-btn danger" onClick={() => del(p)}>
-                  削除
-                </button>
-              </td>
+          {padTop > 0 && (
+            <tr aria-hidden style={{ height: padTop }}>
+              <td colSpan={6} style={{ padding: 0, border: "none" }} />
             </tr>
-          ))}
+          )}
+          {virtualItems.map((vi) => {
+            const p = shown[vi.index];
+            return (
+              <GridRow
+                key={p.address}
+                point={p}
+                isBit={isBit}
+                choices={choices}
+                onCommit={commit}
+                onCommitRaw={commitRaw}
+                onAdvanced={onAdvanced}
+                onDup={dup}
+                onDel={del}
+              />
+            );
+          })}
+          {padBottom > 0 && (
+            <tr aria-hidden style={{ height: padBottom }}>
+              <td colSpan={6} style={{ padding: 0, border: "none" }} />
+            </tr>
+          )}
           <DraftRow
             mode={mode}
             slaveId={slaveId}
@@ -199,6 +182,79 @@ export function RegisterGrid({ mode, slaveId, kind, points, search, wordOrder, o
         </tbody>
       </table>
     </div>
+  );
+}
+
+const ROW_HEIGHT = 30;
+
+function GridRow({
+  point: p,
+  isBit,
+  choices,
+  onCommit,
+  onCommitRaw,
+  onAdvanced,
+  onDup,
+  onDel,
+}: {
+  point: PointDict;
+  isBit: boolean;
+  choices: Datatype[];
+  onCommit: (p: PointDict, patch: { decoded?: string; datatype?: Datatype; tag?: string; raw?: number }) => void;
+  onCommitRaw: (p: PointDict, text: string) => void;
+  onAdvanced: (p: PointDict) => void;
+  onDup: (p: PointDict) => void;
+  onDel: (p: PointDict) => void;
+}) {
+  return (
+    <tr className={p.advanced ? "advanced" : ""} style={{ height: ROW_HEIGHT }}>
+      <td>
+        <input value={p.address} readOnly tabIndex={-1} />
+      </td>
+      <td>
+        {isBit ? (
+          <input
+            type="checkbox"
+            checked={!!p.raw}
+            onChange={(e) => onCommit(p, { raw: e.target.checked ? 1 : 0 })}
+          />
+        ) : (
+          <EditableCell value={String(p.raw)} onCommit={(v) => onCommitRaw(p, v)} />
+        )}
+      </td>
+      <td>
+        <EditableCell value={p.decoded_hex} readOnly={isBit} onCommit={(v) => onCommit(p, { decoded: v })} />
+      </td>
+      <td>
+        <select
+          value={p.datatype}
+          disabled={isBit}
+          onChange={(e) => onCommit(p, { datatype: e.target.value as Datatype })}
+        >
+          {choices.map((c) => (
+            <option key={c} value={c}>
+              {c}
+            </option>
+          ))}
+        </select>
+      </td>
+      <td>
+        <EditableCell value={p.tag} onCommit={(v) => onCommit(p, { tag: v })} />
+      </td>
+      <td className="actions">
+        {!isBit && (
+          <button className="cell-btn" onClick={() => onAdvanced(p)} title="異常応答/遅延/自動変化">
+            詳細
+          </button>
+        )}
+        <button className="cell-btn" onClick={() => onDup(p)}>
+          複製
+        </button>
+        <button className="cell-btn danger" onClick={() => onDel(p)}>
+          削除
+        </button>
+      </td>
+    </tr>
   );
 }
 
