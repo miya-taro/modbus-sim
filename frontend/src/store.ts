@@ -37,7 +37,7 @@ interface State {
 const emptyMode = (mode: Mode): ModeState => ({
   mode,
   selected_slave_id: 1,
-  slaves: [{ id: 1, tag: "", activity: "off" }],
+  slaves: [{ id: 1, tag: "", word_order: "ABCD", activity: "off" }],
   points: { "1": [] },
 });
 

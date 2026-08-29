@@ -4,8 +4,8 @@ import { useStore } from "../store";
 import { RegisterGrid } from "../components/RegisterGrid";
 import { RangeAddDialog } from "../components/RangeAddDialog";
 import { AdvancedDialog } from "../components/AdvancedDialog";
-import { KIND_LABELS, KIND_ORDER } from "../types";
-import type { KindSlug, Mode, PointDict } from "../types";
+import { KIND_LABELS, KIND_ORDER, WORD_ORDERS } from "../types";
+import type { KindSlug, Mode, PointDict, WordOrder } from "../types";
 
 export function SlaveTab({ mode }: { mode: Mode }) {
   const ms = useStore((s) => s[mode]);
@@ -69,6 +69,15 @@ export function SlaveTab({ mode }: { mode: Mode }) {
     }
   };
 
+  const setWordOrder = async (word_order: WordOrder) => {
+    try {
+      await api.patchSlave(mode, selId, { word_order });
+      await refreshMode(mode);
+    } catch (e) {
+      setError(String((e as Error).message ?? e));
+    }
+  };
+
   const runImport = async () => {
     try {
       const r = await api.importPoints(mode, selId, importText, kind);
@@ -85,7 +94,9 @@ export function SlaveTab({ mode }: { mode: Mode }) {
   const slaves = sq
     ? ms.slaves.filter((s) => `${s.id} ${s.tag}`.toLowerCase().includes(sq))
     : ms.slaves;
-  const selTag = ms.slaves.find((s) => s.id === selId)?.tag ?? "";
+  const selSlave = ms.slaves.find((s) => s.id === selId);
+  const selTag = selSlave?.tag ?? "";
+  const selWordOrder: WordOrder = selSlave?.word_order ?? "ABCD";
 
   return (
     <div className="slave-layout">
@@ -131,6 +142,20 @@ export function SlaveTab({ mode }: { mode: Mode }) {
           defaultValue={selTag}
           onBlur={(e) => e.target.value !== selTag && saveTag(e.target.value)}
         />
+        <label style={{ display: "block", marginTop: 8 }}>
+          <span className="muted">ワード/バイト順（int32/float）</span>
+          <select
+            style={{ width: "100%", marginTop: 2 }}
+            value={selWordOrder}
+            onChange={(e) => setWordOrder(e.target.value as WordOrder)}
+          >
+            {WORD_ORDERS.map((w) => (
+              <option key={w.value} value={w.value}>
+                {w.label}
+              </option>
+            ))}
+          </select>
+        </label>
       </div>
 
       <div className="card" style={{ margin: 0 }}>
@@ -157,6 +182,7 @@ export function SlaveTab({ mode }: { mode: Mode }) {
           kind={kind}
           points={kindPoints}
           search={regSearch}
+          wordOrder={selWordOrder}
           onAdvanced={setAdvPoint}
         />
       </div>

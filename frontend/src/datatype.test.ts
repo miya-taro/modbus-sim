@@ -62,6 +62,29 @@ describe("parseRawInput", () => {
   });
 });
 
+describe("word order", () => {
+  it("ABCD is the default and matches big-endian", () => {
+    expect(formatDecodedDisplay("int32", "hr", 0x12345678, "ABCD")).toBe("0x12345678");
+  });
+  it("CDAB swaps 16-bit words", () => {
+    expect(formatDecodedDisplay("int32", "hr", 0x12345678, "CDAB")).toBe("0x56781234");
+  });
+  it("BADC swaps bytes within each word", () => {
+    expect(formatDecodedDisplay("int32", "hr", 0x12345678, "BADC")).toBe("0x34127856");
+  });
+  it("DCBA fully reverses", () => {
+    expect(formatDecodedDisplay("int32", "hr", 0x12345678, "DCBA")).toBe("0x78563412");
+  });
+  it("round-trips through decoded input for every order", () => {
+    for (const order of ["ABCD", "CDAB", "BADC", "DCBA"] as const) {
+      const hex = formatDecodedDisplay("float32", "hr", 3.5, order);
+      expect(parseDecodedInput(hex, "float32", order)).toBeCloseTo(3.5, 5);
+      const hex64 = formatDecodedDisplay("float64", "hr", -12345.678, order);
+      expect(parseDecodedInput(hex64, "float64", order)).toBeCloseTo(-12345.678, 6);
+    }
+  });
+});
+
 describe("validateAddress", () => {
   it("rejects out of range", () => {
     expect(() => validateAddress(-1, "uint16")).toThrow();

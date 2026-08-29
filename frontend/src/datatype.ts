@@ -1,11 +1,30 @@
-// modbus_sim/datastore.py の decode/encode 相当を TypeScript へ移植。
+// modbus_sim/datastore.py + wordorder.py の decode/encode 相当を TypeScript へ移植。
 // 表示・入力の即時変換に使い、確定時はバックエンドが最終的な正とする。
-import type { Datatype, KindSlug } from "./types";
+import type { Datatype, KindSlug, WordOrder } from "./types";
 
 export const REGISTER_COUNT = 65536;
 
 const _buf = new ArrayBuffer(8);
 const _dv = new DataView(_buf);
+
+/** 正規 BE バイト列 <-> ワイヤ並び（自己反転）。 */
+function reorder(bytes: Uint8Array, order: WordOrder): Uint8Array {
+  if (order === "ABCD") return bytes;
+  if (order === "DCBA") return bytes.slice().reverse();
+  const out = new Uint8Array(bytes.length);
+  for (let i = 0; i < bytes.length; i += 2) {
+    if (order === "CDAB") {
+      // ワード順を反転
+      out[i] = bytes[bytes.length - 2 - i];
+      out[i + 1] = bytes[bytes.length - 1 - i];
+    } else {
+      // BADC: 各ワード内のバイトを入れ替え
+      out[i] = bytes[i + 1];
+      out[i + 1] = bytes[i];
+    }
+  }
+  return out;
+}
 
 export function datatypeSpan(dt: Datatype): number {
   if (dt === "float64") return 4;
@@ -37,21 +56,35 @@ function hex(n: number, digits: number): string {
   return "0x" + (n >>> 0).toString(16).toUpperCase().padStart(digits, "0");
 }
 
-function float32Bits(raw: number): number {
-  _dv.setFloat32(0, raw, false);
-  return _dv.getUint32(0, false);
+/** 多レジスタ型 raw -> 正規 BE バイト列。1 レジスタ型は null。 */
+function canonicalBytes(dt: Datatype, raw: number): Uint8Array | null {
+  if (dt === "int32") {
+    _dv.setInt32(0, raw | 0, false);
+    return new Uint8Array(_buf.slice(0, 4));
+  }
+  if (dt === "float32") {
+    _dv.setFloat32(0, raw, false);
+    return new Uint8Array(_buf.slice(0, 4));
+  }
+  if (dt === "float64") {
+    _dv.setFloat64(0, raw, false);
+    return new Uint8Array(_buf.slice(0, 8));
+  }
+  return null;
 }
 
-function float64BitsHex(raw: number): string {
-  _dv.setFloat64(0, raw, false);
-  return "0x" + _dv.getBigUint64(0, false).toString(16).toUpperCase().padStart(16, "0");
-}
+const toHex = (bytes: Uint8Array): string =>
+  "0x" + Array.from(bytes, (b) => b.toString(16).toUpperCase().padStart(2, "0")).join("");
 
-export function formatDecodedDisplay(dt: Datatype, kind: KindSlug, raw: number): string {
+export function formatDecodedDisplay(
+  dt: Datatype,
+  kind: KindSlug,
+  raw: number,
+  wordOrder: WordOrder = "ABCD",
+): string {
   if (kind === "coil" || kind === "di") return hex(raw ? 1 : 0, 2);
-  if (dt === "float32") return hex(float32Bits(raw), 8);
-  if (dt === "float64") return float64BitsHex(raw);
-  if (dt === "int32") return hex(raw & 0xffffffff, 8);
+  const canonical = canonicalBytes(dt, raw);
+  if (canonical) return toHex(reorder(canonical, wordOrder));
   return hex(raw & 0xffff, 4);
 }
 
@@ -64,32 +97,26 @@ function parseHexBigInt(text: string): bigint {
   return BigInt("0x" + t);
 }
 
-// Decoded 欄の入力（すべて16進）を datatype に応じた raw（メモリ表現 or float 値）へ。
-export function parseDecodedInput(text: string, dt: Datatype): number {
+// Decoded 欄の入力（ワイヤ上のバイト列の16進）を raw へ復元。
+export function parseDecodedInput(text: string, dt: Datatype, wordOrder: WordOrder = "ABCD"): number {
   const s = text.trim();
-  if (s === "") return isFloat(dt) ? 0 : 0;
+  if (s === "") return 0;
   const parsed = parseHexBigInt(s);
-  switch (dt) {
-    case "bool":
-      return parsed !== 0n ? 1 : 0;
-    case "uint16":
-    case "int16":
-      return Number(parsed & 0xffffn);
-    case "float32": {
-      _dv.setUint32(0, Number(parsed & 0xffffffffn), false);
-      return _dv.getFloat32(0, false);
-    }
-    case "float64": {
-      _dv.setBigUint64(0, parsed & 0xffffffffffffffffn, false);
-      return _dv.getFloat64(0, false);
-    }
-    default: {
-      // int32
-      let v = Number(parsed & 0xffffffffn);
-      if (v >= 0x80000000) v -= 0x100000000;
-      return v;
-    }
+  if (dt === "bool") return parsed !== 0n ? 1 : 0;
+  if (dt === "uint16" || dt === "int16") return Number(parsed & 0xffffn);
+
+  const nbytes = datatypeSpan(dt) * 2;
+  const wire = new Uint8Array(nbytes);
+  let v = parsed & ((1n << BigInt(nbytes * 8)) - 1n);
+  for (let i = nbytes - 1; i >= 0; i--) {
+    wire[i] = Number(v & 0xffn);
+    v >>= 8n;
   }
+  const canonical = reorder(wire, wordOrder);
+  canonical.forEach((b, i) => _dv.setUint8(i, b));
+  if (dt === "float32") return _dv.getFloat32(0, false);
+  if (dt === "float64") return _dv.getFloat64(0, false);
+  return _dv.getInt32(0, false); // int32
 }
 
 export function parseRawInput(text: string, dt: Datatype): number {

@@ -8,12 +8,13 @@ from pathlib import Path
 from modbus_sim.config import CommMode, RegisterKind
 from modbus_sim.datastore import (
     SlaveRegistry,
-    format_decoded_display,
     decode_value,
+    format_decoded_display,
     rtu_registry,
     tcp_registry,
 )
 from modbus_sim.models import CommSettings, RegisterPoint
+from modbus_sim.wordorder import WordOrder
 from modbus_sim.server_manager import ModbusServerManager
 from modbus_sim.settings_model import apply_dict_to_comm, comm_to_dict
 from modbus_sim.settings_store import SettingsStore
@@ -38,13 +39,13 @@ def kind_to_slug(kind: RegisterKind) -> str:
     return _SLUG_BY_KIND[kind]
 
 
-def point_to_dict(point: RegisterPoint) -> dict:
+def point_to_dict(point: RegisterPoint, word_order: WordOrder = WordOrder.ABCD) -> dict:
     data = {
         "address": point.address,
         "kind": kind_to_slug(point.kind),
         "datatype": point.datatype.value,
         "raw": point.raw,
-        "decoded_hex": format_decoded_display(point),
+        "decoded_hex": format_decoded_display(point, word_order),
         "decoded": decode_value(point),
         "tag": point.tag,
         "advanced": point.has_advanced_settings(),
@@ -185,6 +186,7 @@ class AppState:
                 {
                     "id": sid,
                     "tag": reg.get_tag(sid),
+                    "word_order": reg.get_word_order(sid).value,
                     "activity": reg.activity_state(sid, any_server_running=running),
                 }
                 for sid in reg.list_slave_ids()
@@ -196,7 +198,7 @@ class AppState:
         points = slave.list_points()
         if kind is not None:
             points = [p for p in points if p.kind == kind]
-        return [point_to_dict(p) for p in points]
+        return [point_to_dict(p, slave.word_order) for p in points]
 
     def log_lines(self) -> list[str]:
         return list(self.manager.log_buffer)

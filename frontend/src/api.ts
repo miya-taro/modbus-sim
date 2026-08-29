@@ -62,8 +62,11 @@ export const api = {
   listSlaves: (mode: Mode) => req<ModeState>(`/api/slaves/${mode}`),
   addSlave: (mode: Mode, id: number) => req<ModeState>(`/api/slaves/${mode}`, jsonBody({ id })),
   removeSlave: (mode: Mode, id: number) => req<ModeState>(`/api/slaves/${mode}/${id}`, { method: "DELETE" }),
-  patchSlave: (mode: Mode, id: number, patch: { tag?: string; selected?: boolean }) =>
-    req<ModeState>(`/api/slaves/${mode}/${id}`, { method: "PATCH", body: JSON.stringify(patch) }),
+  patchSlave: (
+    mode: Mode,
+    id: number,
+    patch: { tag?: string; selected?: boolean; word_order?: string },
+  ) => req<ModeState>(`/api/slaves/${mode}/${id}`, { method: "PATCH", body: JSON.stringify(patch) }),
 
   listPoints: (mode: Mode, id: number, kind: KindSlug) =>
     req<PointDict[]>(`/api/slaves/${mode}/${id}/points?kind=${kind}`),

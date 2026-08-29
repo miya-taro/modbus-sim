@@ -1,6 +1,14 @@
 export type Mode = "tcp" | "rtu";
 export type KindSlug = "hr" | "ir" | "coil" | "di";
 export type Datatype = "uint16" | "int16" | "int32" | "float32" | "float64" | "bool";
+export type WordOrder = "ABCD" | "CDAB" | "BADC" | "DCBA";
+
+export const WORD_ORDERS: { value: WordOrder; label: string }[] = [
+  { value: "ABCD", label: "ABCD (ビッグエンディアン)" },
+  { value: "CDAB", label: "CDAB (ワードスワップ)" },
+  { value: "BADC", label: "BADC (バイトスワップ)" },
+  { value: "DCBA", label: "DCBA (リトルエンディアン)" },
+];
 export type FaultMode = "none" | "exception" | "no_response";
 export type AutoMode = "none" | "increment" | "random_walk" | "sine";
 export type Activity = "off" | "idle" | "active";
@@ -28,6 +36,7 @@ export interface PointDict {
 export interface SlaveDict {
   id: number;
   tag: string;
+  word_order: WordOrder;
   activity: Activity;
 }
 

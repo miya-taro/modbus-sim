@@ -24,6 +24,13 @@ from modbus_sim.config import (
     ValueKind,
 )
 from modbus_sim.models import RegisterPoint
+from modbus_sim.wordorder import WordOrder, pack_words, reorder, unpack_bytes
+
+_STRUCT_FMT = {
+    ValueKind.INT32: ">i",
+    ValueKind.FLOAT32: ">f",
+    ValueKind.FLOAT64: ">d",
+}
 
 ActionFn = Callable[
     [int, int, int, int, list[int], list[int] | list[bool] | None],
@@ -105,6 +112,8 @@ class SlaveDatastore:
         self.slave_id = slave_id
         self._owner = owner
         self.points: dict[tuple[int, RegisterKind], RegisterPoint] = {}
+        # 多レジスタ型（int32/float32/float64）のワイヤ上のワード/バイト順
+        self.word_order: WordOrder = WordOrder.ABCD
         self._coils = [False] * REGISTER_COUNT
         self._discrete_inputs = [False] * REGISTER_COUNT
         self._holding_registers = [0] * REGISTER_COUNT
@@ -183,19 +192,9 @@ class SlaveDatastore:
                     _sync_bits_to_registers(bits, block[2], block[0])
             return
 
-        if point.datatype == ValueKind.INT32:
-            packed = struct.pack(">i", int(point.raw))
-            hi, lo = struct.unpack(">HH", packed)
-            memory[point.address] = hi
-            memory[point.address + 1] = lo
-        elif point.datatype == ValueKind.FLOAT32:
-            packed = struct.pack(">f", float(point.raw))
-            hi, lo = struct.unpack(">HH", packed)
-            memory[point.address] = hi
-            memory[point.address + 1] = lo
-        elif point.datatype == ValueKind.FLOAT64:
-            words = struct.unpack(">HHHH", struct.pack(">d", float(point.raw)))
-            for i, word in enumerate(words):
+        canonical = _canonical_bytes(point.datatype, point.raw)
+        if canonical is not None:
+            for i, word in enumerate(pack_words(canonical, self.word_order)):
                 memory[point.address + i] = word
         else:
             value = int(point.raw)
@@ -217,7 +216,9 @@ class SlaveDatastore:
                 RegisterKind.HOLDING_REGISTER,
                 RegisterKind.INPUT_REGISTER,
             ):
-                latest = raw_from_memory(point, words=self._memory_words(point))
+                latest = raw_from_memory(
+                    point, words=self._memory_words(point), word_order=self.word_order
+                )
             else:
                 latest = raw_from_memory(
                     point, hi=int(self.read_raw(point.kind, point.address))
@@ -339,9 +340,18 @@ class SlaveDatastore:
                 memory = self._memory(kind)
                 span = point.datatype.register_span
                 words = [int(memory[index + i]) for i in range(span)]
-                point.raw = raw_from_memory(point, words=words)
+                point.raw = raw_from_memory(point, words=words, word_order=self.word_order)
             else:
                 point.raw = raw_from_memory(point, hi=int(self.read_raw(kind, index)))
+
+    def set_word_order(self, order: WordOrder) -> None:
+        """ワード/バイト順を変更し、既存の多レジスタ点をメモリへ再書き込みする。"""
+        if order == self.word_order:
+            return
+        self.word_order = order
+        for point in self.points.values():
+            if point.datatype.register_span >= 2:
+                self._write_raw(point)
 
     def tick_auto_values(self, dt: float) -> bool:
         """自動変化が有効な全ポイントを dt 秒進める。値が変わったら True。"""
@@ -393,6 +403,14 @@ class SlaveRegistry:
         if slave_id not in self._slaves:
             raise KeyError(f"Slave ID {slave_id} not found")
         self._tags[slave_id] = tag.strip()
+
+    def get_word_order(self, slave_id: int) -> WordOrder:
+        return self._slaves[slave_id].word_order
+
+    def set_word_order(self, slave_id: int, order: WordOrder) -> None:
+        if slave_id not in self._slaves:
+            raise KeyError(f"Slave ID {slave_id} not found")
+        self._slaves[slave_id].set_word_order(order)
 
     def touch_activity(self, slave_id: int) -> None:
         if slave_id in self._slaves:
@@ -482,6 +500,7 @@ class SlaveRegistry:
                 {
                     "id": slave_id,
                     "tag": self._tags.get(slave_id, ""),
+                    "word_order": slave.word_order.value,
                     "points": points,
                 }
             )
@@ -505,6 +524,10 @@ class SlaveRegistry:
                 continue
             self._slaves[slave_id] = SlaveDatastore(slave_id, owner=self)
             self._tags[slave_id] = str(entry.get("tag", "")).strip()
+            try:
+                self._slaves[slave_id].word_order = WordOrder(entry.get("word_order", "ABCD"))
+            except ValueError:
+                pass
             points = entry.get("points", [])
             if isinstance(points, list):
                 for point_data in points:
@@ -621,16 +644,30 @@ def validate_address(address: int, datatype: ValueKind) -> None:
 FLOAT32_MAX = 3.4028234663852886e38
 
 
+_INT_RANGES = {
+    ValueKind.UINT16: (0, 0xFFFF),
+    ValueKind.INT16: (-0x8000, 0xFFFF),  # 0xFFFF はメモリ表現としての -1
+    ValueKind.INT32: (-0x80000000, 0xFFFFFFFF),
+    ValueKind.BOOL: (0, 1),
+}
+
+
 def validate_datatype_value(datatype: ValueKind, raw: int | float) -> None:
     """raw が datatype で表現可能か検証する（範囲外は ValueError）。
 
-    float32 に大きすぎる有限値を渡すと struct.pack が OverflowError を投げるため、
-    書き込み前にここで弾く。inf / nan は許可（ビットパターンとして格納できる）。
+    範囲外の値をそのまま struct.pack すると OverflowError で 500 になるため、
+    書き込み前にここで弾く。float の inf / nan は許可（ビットパターンとして格納可）。
     """
     if datatype == ValueKind.FLOAT32:
         value = float(raw)
         if math.isfinite(value) and abs(value) > FLOAT32_MAX:
             raise ValueError("float32 で表現できる範囲 (±3.4e38) を超えています")
+        return
+    if datatype == ValueKind.FLOAT64:
+        return
+    lo, hi = _INT_RANGES[datatype]
+    if not lo <= int(raw) <= hi:
+        raise ValueError(f"{datatype.value} の範囲 ({lo}〜{hi}) を超えています")
 
 
 def _sync_bits_to_registers(bits: list[bool], registers: list[int], block_start: int = 0) -> None:
@@ -672,17 +709,29 @@ def _float64_bits(raw: int | float) -> int:
     return struct.unpack(">Q", struct.pack(">d", float(raw)))[0]
 
 
+def _canonical_bytes(datatype: ValueKind, raw: int | float) -> bytes | None:
+    """多レジスタ型の raw を正規ビッグエンディアンバイト列へ。1 レジスタ型は None。"""
+    if datatype == ValueKind.INT32:
+        return struct.pack(">i", int(raw))
+    if datatype == ValueKind.FLOAT32:
+        return struct.pack(">f", float(raw))
+    if datatype == ValueKind.FLOAT64:
+        return struct.pack(">d", float(raw))
+    return None
+
+
 def raw_from_memory(
     point: RegisterPoint,
     *,
     hi: int | None = None,
     lo: int | None = None,
     words: list[int] | None = None,
+    word_order: WordOrder = WordOrder.ABCD,
 ) -> int | float:
-    """メモリ上の符号なし値を、point.datatype に合わせた raw に変換する。
+    """メモリ上の符号なしワード列を、point.datatype に合わせた raw に変換する。
 
-    2 レジスタ型は hi/lo、または words=[hi, lo] を渡す。
-    float64 は words=[w0, w1, w2, w3]（ビッグエンディアン）で渡す。
+    2 レジスタ型は hi/lo または words=[...]、float64 は words=[w0..w3] を渡す。
+    word_order はワイヤ上のワード/バイト順。
     """
     if point.kind in (RegisterKind.COIL, RegisterKind.DISCRETE_INPUT):
         base = words[0] if words else hi
@@ -690,12 +739,10 @@ def raw_from_memory(
     if words is None:
         words = [w for w in (hi, lo) if w is not None]
     words = [int(w) & 0xFFFF for w in words]
-    if point.datatype == ValueKind.INT32:
-        return struct.unpack(">i", struct.pack(">HH", words[0], words[1]))[0]
-    if point.datatype == ValueKind.FLOAT32:
-        return struct.unpack(">f", struct.pack(">HH", words[0], words[1]))[0]
-    if point.datatype == ValueKind.FLOAT64:
-        return struct.unpack(">d", struct.pack(">HHHH", *words[:4]))[0]
+    span = point.datatype.register_span
+    if span >= 2:
+        canonical = unpack_bytes(words[:span], word_order)
+        return struct.unpack(_STRUCT_FMT[point.datatype], canonical)[0]
     value = (words[0] if words else 0) & 0xFFFF
     if point.datatype == ValueKind.INT16:
         return value - 0x10000 if value >= 0x8000 else value
@@ -718,24 +765,26 @@ def _raw_values_equal(point: RegisterPoint, latest: int | float) -> bool:
     return int(point.raw) == int(latest)
 
 
-def format_decoded_display(point: RegisterPoint) -> str:
+def format_decoded_display(
+    point: RegisterPoint, word_order: WordOrder = WordOrder.ABCD
+) -> str:
+    """Decoded 欄の表示（ワイヤ上のバイト列の 16 進）。"""
     if point.kind in (RegisterKind.COIL, RegisterKind.DISCRETE_INPUT):
         return f"0x{int(bool(point.raw)):02X}"
-    if point.datatype == ValueKind.FLOAT32:
-        return f"0x{_float32_bits(point.raw):08X}"
-    if point.datatype == ValueKind.FLOAT64:
-        return f"0x{_float64_bits(point.raw):016X}"
-    if point.datatype == ValueKind.INT32:
-        value = int(point.raw) & 0xFFFFFFFF
-        return f"0x{value:08X}"
+    canonical = _canonical_bytes(point.datatype, point.raw)
+    if canonical is not None:
+        return "0x" + reorder(canonical, word_order).hex().upper()
     value = int(point.raw) & 0xFFFF
     return f"0x{value:04X}"
 
 
-def parse_decoded_input(value: str, datatype: ValueKind) -> int | float:
+def parse_decoded_input(
+    value: str, datatype: ValueKind, word_order: WordOrder = WordOrder.ABCD
+) -> int | float:
+    """Decoded 欄の入力（ワイヤ上のバイト列の 16 進）を raw へ復元する。"""
     text = value.strip()
     if not text:
-        return 0.0 if datatype == ValueKind.FLOAT32 else 0
+        return 0.0 if datatype.is_float else 0
     if text.lower().startswith("0x"):
         parsed = int(text, 16)
     elif len(text) > 1 and text[-1].lower() == "h":
@@ -746,20 +795,13 @@ def parse_decoded_input(value: str, datatype: ValueKind) -> int | float:
 
     if datatype == ValueKind.BOOL:
         return 1 if parsed else 0
-    if datatype == ValueKind.UINT16:
+    if datatype in (ValueKind.UINT16, ValueKind.INT16):
         return parsed & 0xFFFF
-    if datatype == ValueKind.INT16:
-        return parsed & 0xFFFF
-    if datatype == ValueKind.FLOAT32:
-        # Decoded 欄は IEEE754 のビットパターン。float 値へ復元する。
-        return struct.unpack(">f", struct.pack(">I", parsed & 0xFFFFFFFF))[0]
-    if datatype == ValueKind.FLOAT64:
-        return struct.unpack(">d", struct.pack(">Q", parsed & 0xFFFFFFFFFFFFFFFF))[0]
-    # INT32: struct.pack(">i") 向けに符号付きへ正規化（例: FFFFFFFF → -1）
-    value32 = parsed & 0xFFFFFFFF
-    if value32 >= 0x80000000:
-        value32 -= 0x100000000
-    return value32
+    span = datatype.register_span
+    nbytes = span * 2
+    wire = (parsed & ((1 << (nbytes * 8)) - 1)).to_bytes(nbytes, "big")
+    canonical = reorder(wire, word_order)
+    return struct.unpack(_STRUCT_FMT[datatype], canonical)[0]
 
 
 def parse_raw_input(value: str, datatype: ValueKind) -> int | float:

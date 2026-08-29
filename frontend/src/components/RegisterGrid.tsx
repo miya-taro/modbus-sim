@@ -3,7 +3,7 @@ import { api } from "../api";
 import { useStore } from "../store";
 import { datatypeChoicesFor, defaultDatatypeFor } from "../kinds";
 import { datatypeSpan, formatDecodedDisplay, parseRawInput, validateAddress } from "../datatype";
-import type { Datatype, KindSlug, Mode, PointDict } from "../types";
+import type { Datatype, KindSlug, Mode, PointDict, WordOrder } from "../types";
 
 interface Props {
   mode: Mode;
@@ -11,6 +11,7 @@ interface Props {
   kind: KindSlug;
   points: PointDict[];
   search: string;
+  wordOrder: WordOrder;
   onAdvanced: (p: PointDict) => void;
 }
 
@@ -56,7 +57,7 @@ function EditableCell({
   );
 }
 
-export function RegisterGrid({ mode, slaveId, kind, points, search, onAdvanced }: Props) {
+export function RegisterGrid({ mode, slaveId, kind, points, search, wordOrder, onAdvanced }: Props) {
   const { setError, refreshMode, askConfirm } = useStore();
   const isBit = kind === "coil" || kind === "di";
   const choices = datatypeChoicesFor(kind);
@@ -191,6 +192,7 @@ export function RegisterGrid({ mode, slaveId, kind, points, search, onAdvanced }
             slaveId={slaveId}
             kind={kind}
             existing={points}
+            wordOrder={wordOrder}
             onDone={() => refreshMode(mode)}
             setError={setError}
           />
@@ -205,6 +207,7 @@ function DraftRow({
   slaveId,
   kind,
   existing,
+  wordOrder,
   onDone,
   setError,
 }: {
@@ -212,6 +215,7 @@ function DraftRow({
   slaveId: number;
   kind: KindSlug;
   existing: PointDict[];
+  wordOrder: WordOrder;
   onDone: () => void;
   setError: (e: string) => void;
 }) {
@@ -272,7 +276,7 @@ function DraftRow({
         />
       </td>
       <td>
-        <input value={addr ? decodedPreview(datatype, kind, raw) : ""} readOnly tabIndex={-1} />
+        <input value={addr ? decodedPreview(datatype, kind, raw, wordOrder) : ""} readOnly tabIndex={-1} />
       </td>
       <td>
         <select
@@ -303,11 +307,11 @@ function DraftRow({
   );
 }
 
-function decodedPreview(dt: Datatype, kind: KindSlug, raw: string): string {
+function decodedPreview(dt: Datatype, kind: KindSlug, raw: string, wordOrder: WordOrder): string {
   const n = Number(raw);
   if (!Number.isFinite(n)) return "";
   try {
-    return formatDecodedDisplay(dt, kind, n);
+    return formatDecodedDisplay(dt, kind, n, wordOrder);
   } catch {
     return "";
   }

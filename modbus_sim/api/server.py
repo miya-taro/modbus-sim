@@ -37,6 +37,7 @@ from modbus_sim.settings_model import (
     comm_to_tcp_config,
 )
 from modbus_sim.settings_store import SettingsStore
+from modbus_sim.wordorder import WordOrder
 
 
 # --- request models -------------------------------------------------------
@@ -52,6 +53,7 @@ class SlaveBody(BaseModel):
 class SlavePatchBody(BaseModel):
     tag: str | None = None
     selected: bool | None = None
+    word_order: str | None = None
 
 
 class PointBody(BaseModel):
@@ -94,7 +96,9 @@ class PathBody(BaseModel):
     path: str
 
 
-def _apply_point_body(existing: RegisterPoint | None, body: PointBody) -> RegisterPoint:
+def _apply_point_body(
+    existing: RegisterPoint | None, body: PointBody, word_order: WordOrder = WordOrder.ABCD
+) -> RegisterPoint:
     try:
         datatype = ValueKind(body.datatype)
     except ValueError:
@@ -115,7 +119,7 @@ def _apply_point_body(existing: RegisterPoint | None, body: PointBody) -> Regist
         point.tag = body.tag.strip()
     if body.decoded is not None:
         try:
-            point.raw = parse_decoded_input(body.decoded, datatype)
+            point.raw = parse_decoded_input(body.decoded, datatype, word_order)
         except ValueError as exc:
             raise HTTPException(400, str(exc)) from exc
     elif body.raw is not None:
@@ -316,6 +320,11 @@ def create_app(settings_path: Path | None = None) -> FastAPI:
             reg.set_tag(slave_id, body.tag)
         if body.selected:
             reg.selected_slave_id = slave_id
+        if body.word_order is not None:
+            try:
+                reg.set_word_order(slave_id, WordOrder(body.word_order))
+            except ValueError:
+                raise HTTPException(400, f"未知の word_order: {body.word_order}") from None
         state.schedule_save()
         return state.slaves_snapshot(mode)
 
@@ -338,7 +347,7 @@ def create_app(settings_path: Path | None = None) -> FastAPI:
             raise HTTPException(404, str(exc)) from exc
         kind = kind_from_slug(body.kind)
         existing = slave.get_point(body.address, kind)
-        point = _apply_point_body(existing, body)
+        point = _apply_point_body(existing, body, slave.word_order)
         clash = registry_ops.find_overlap(
             slave, point.address, kind, point.datatype, ignore_key=(point.address, kind)
         )
@@ -350,7 +359,7 @@ def create_app(settings_path: Path | None = None) -> FastAPI:
             )
         slave.upsert_point(point)
         state.schedule_save()
-        return point_to_dict(point)
+        return point_to_dict(point, slave.word_order)
 
     @app.delete("/api/slaves/{mode}/{slave_id}/points/{kind}/{address}")
     async def delete_point(mode: str, slave_id: int, kind: str, address: int) -> dict:
