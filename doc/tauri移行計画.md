@@ -441,3 +441,20 @@ Step 2〜3 の間は PySide 版と API 版が同じ `datastore` グローバル�
   （ブートローダが署名済みのため）。
 
 暫定対応: エクスポート/インポートのファイル指定はパス直接入力（将来 Tauri のダイアログに置換）。
+
+### 2026-08-29（5回目）— CI ビルド成功 + 不具合修正
+
+- CI（`v0.1.1`）でインストーラ生成成功。`release/bundle/nsis/Modbus Simulator_0.1.0_x64-setup.exe`。
+  ※ 1回目 `v0.1.0` は `pip install -e .` が `frontend/` を top-level パッケージと誤検出して失敗
+  → `pyproject.toml` に `[tool.setuptools.packages.find] include=["modbus_sim*"]` を追加。
+- **不具合修正**（ユーザー報告）:
+  - float32 に有限で大きすぎる値（例 1e40）を入れると `struct.pack(">f")` が OverflowError →
+    未処理の 500。`validate_datatype_value()` を追加し API/範囲追加/取込で 400 として弾く
+    （inf/nan はビットパターンとして格納可なので許可）。
+  - int32/float32（2レジスタ）・float64（4レジスタ）の**継続アドレスに別の点を置ける**問題。
+    `registry_ops.find_overlap()` / `occupied_addresses()` を追加し、
+    upsert（datatype 変更含む）・範囲追加・CSV取込・`next_free_address`（複製）で重複を禁止。
+    別 kind の同一 addr は従来どおり独立。フロントの追加行にも即時チェックを実装。
+- テスト: 168 passed（+5）。frontend vitest 17 / build OK。
+- float 変換自体は総点検済み（float32/float64 の memory ワード・decoded hex・往復・
+  負数・inf・nan すべて Python/TS 一致）。

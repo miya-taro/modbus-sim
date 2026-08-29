@@ -139,6 +139,68 @@ def test_advanced_validation(client):
     assert ok.status_code == 200 and ok.json()["advanced"] is True
 
 
+def test_float32_out_of_range_is_400_not_500(client):
+    r = client.put(
+        "/api/slaves/tcp/1/points",
+        json={"address": 0, "kind": "hr", "datatype": "float32", "raw": 1e40},
+    )
+    assert r.status_code == 400
+    assert "float32" in r.json()["detail"]
+    # inf はビットパターンとして格納できるので許可
+    ok = client.put(
+        "/api/slaves/tcp/1/points",
+        json={"address": 2, "kind": "hr", "datatype": "float32", "decoded": "0x7F800000"},
+    )
+    assert ok.status_code == 200
+
+
+def test_multi_register_overlap_is_rejected(client):
+    client.put(
+        "/api/slaves/tcp/1/points",
+        json={"address": 10, "kind": "hr", "datatype": "float32", "raw": 1.5},
+    )
+    # addr 11 は float32@10 の下位ワード
+    clash = client.put(
+        "/api/slaves/tcp/1/points",
+        json={"address": 11, "kind": "hr", "datatype": "uint16", "raw": 7},
+    )
+    assert clash.status_code == 400
+    assert "10" in clash.json()["detail"]
+
+    # float64@20 は 20..23 を占有 → 23 に置けない
+    client.put(
+        "/api/slaves/tcp/1/points",
+        json={"address": 20, "kind": "hr", "datatype": "float64", "raw": 1.0},
+    )
+    assert client.put(
+        "/api/slaves/tcp/1/points",
+        json={"address": 23, "kind": "hr", "datatype": "uint16", "raw": 1},
+    ).status_code == 400
+
+    # 自分自身の編集（addr 10 の tag 変更）は重複扱いにならない
+    assert client.put(
+        "/api/slaves/tcp/1/points",
+        json={"address": 10, "kind": "hr", "datatype": "float32", "tag": "x"},
+    ).status_code == 200
+
+    # 別 kind の同一 addr は独立なので OK
+    assert client.put(
+        "/api/slaves/tcp/1/points",
+        json={"address": 11, "kind": "ir", "datatype": "uint16", "raw": 1},
+    ).status_code == 200
+
+
+def test_widening_datatype_onto_neighbor_is_rejected(client):
+    client.put("/api/slaves/tcp/1/points",
+               json={"address": 30, "kind": "hr", "datatype": "uint16", "raw": 1})
+    client.put("/api/slaves/tcp/1/points",
+               json={"address": 31, "kind": "hr", "datatype": "uint16", "raw": 2})
+    # addr 30 を int32 化すると 31 と衝突
+    r = client.put("/api/slaves/tcp/1/points",
+                   json={"address": 30, "kind": "hr", "datatype": "int32", "raw": 1})
+    assert r.status_code == 400
+
+
 def test_server_start_stop(client):
     port = next(_PORTS)
     client.put("/api/settings", json={"tcp": {"host": "127.0.0.1", "port": port}})

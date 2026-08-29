@@ -108,3 +108,6 @@ temp/
 # Font / package download leftovers (WSL font install workdirs)
 *.deb
 noto-cjk-extract/
+
+# CI からダウンロードしたビルド成果物
+/release/

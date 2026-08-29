@@ -79,6 +79,18 @@ class TestRangeAdd:
             (102, RegisterKind.INPUT_REGISTER, 7, "S2"),
         ]
 
+    def test_range_add_skips_overlapping_with_existing_multireg(self) -> None:
+        slave = SlaveRegistry().get_slave(1)
+        slave.upsert_point(_hr(11, datatype=ValueKind.FLOAT32))  # 11..12 を占有
+        added, errors = add_register_range(
+            slave, start=10, count=4, kind=RegisterKind.HOLDING_REGISTER,
+            datatype=ValueKind.UINT16, raw=0,
+        )
+        # 10 OK, 11/12 は衝突, 13 OK
+        assert added == 2
+        assert len(errors) == 2
+        assert sorted(p.address for p in slave.list_points()) == [10, 11, 13]
+
     def test_range_add_reports_out_of_range_tail(self) -> None:
         slave = SlaveRegistry().get_slave(1)
         added, errors = add_register_range(
@@ -106,6 +118,17 @@ class TestImportText:
         p51 = slave.get_point(51, RegisterKind.COIL)
         assert p50 is not None and p50.raw == 123 and p50.tag == "mytag"
         assert p51 is not None and bool(p51.raw) is True
+
+    def test_overlap_line_reported_but_others_kept(self) -> None:
+        slave = SlaveRegistry().get_slave(1)
+        slave.upsert_point(_hr(5, datatype=ValueKind.INT32))  # 5..6
+        added, errors, _ = import_register_map_text(
+            slave,
+            "4,hr,uint16,1\n6,hr,uint16,2\n8,hr,uint16,3\n",
+            active_kind=RegisterKind.HOLDING_REGISTER,
+        )
+        assert added == 2  # 4 と 8
+        assert len(errors) == 1 and "6" in errors[0]
 
     def test_invalid_line_reported_but_valid_kept(self) -> None:
         slave = SlaveRegistry().get_slave(1)

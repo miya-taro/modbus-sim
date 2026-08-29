@@ -617,6 +617,22 @@ def validate_address(address: int, datatype: ValueKind) -> None:
         )
 
 
+# IEEE754 単精度で表現できる有限値の最大絶対値
+FLOAT32_MAX = 3.4028234663852886e38
+
+
+def validate_datatype_value(datatype: ValueKind, raw: int | float) -> None:
+    """raw が datatype で表現可能か検証する（範囲外は ValueError）。
+
+    float32 に大きすぎる有限値を渡すと struct.pack が OverflowError を投げるため、
+    書き込み前にここで弾く。inf / nan は許可（ビットパターンとして格納できる）。
+    """
+    if datatype == ValueKind.FLOAT32:
+        value = float(raw)
+        if math.isfinite(value) and abs(value) > FLOAT32_MAX:
+            raise ValueError("float32 で表現できる範囲 (±3.4e38) を超えています")
+
+
 def _sync_bits_to_registers(bits: list[bool], registers: list[int], block_start: int = 0) -> None:
     # registers はブロック先頭 (block_start 番目の packed ワード) から始まる
     # サーバ側の実配列なので、packed 側もそのオフセット分ずらして書き込む

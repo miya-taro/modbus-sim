@@ -7,7 +7,12 @@ UI 層の両方から呼べる純粋関数群。
 from __future__ import annotations
 
 from modbus_sim.config import REGISTER_COUNT, RegisterKind, ValueKind
-from modbus_sim.datastore import SlaveDatastore, parse_raw_input, validate_address
+from modbus_sim.datastore import (
+    SlaveDatastore,
+    parse_raw_input,
+    validate_address,
+    validate_datatype_value,
+)
 from modbus_sim.models import RegisterPoint
 
 _KIND_LABELS = {
@@ -64,13 +69,46 @@ def parse_datatype(text: str, kind: RegisterKind) -> ValueKind:
     return datatype
 
 
+def occupied_addresses(slave: SlaveDatastore, kind: RegisterKind) -> set[int]:
+    """指定 kind で既存点が占有している全アドレス（多レジスタ型の継続分を含む）。"""
+    occ: set[int] = set()
+    for point in slave.points.values():
+        if point.kind == kind:
+            occ.update(range(point.address, point.address + point.datatype.register_span))
+    return occ
+
+
+def find_overlap(
+    slave: SlaveDatastore,
+    address: int,
+    kind: RegisterKind,
+    datatype: ValueKind,
+    *,
+    ignore_key: tuple[int, RegisterKind] | None = None,
+) -> RegisterPoint | None:
+    """address..address+span-1 が同一 kind の既存点と重なる場合その点を返す。
+
+    int32 / float32（2 レジスタ）や float64（4 レジスタ）の継続アドレスに別の点を
+    置いてしまう不整合を防ぐ。ignore_key は編集対象の点自身を除外するために使う。
+    """
+    span = datatype.register_span
+    for point in slave.points.values():
+        if point.kind != kind or point.key == ignore_key:
+            continue
+        other_span = point.datatype.register_span
+        if address < point.address + other_span and point.address < address + span:
+            return point
+    return None
+
+
 def next_free_address(
     slave: SlaveDatastore, kind: RegisterKind, datatype: ValueKind, start: int
 ) -> int | None:
     step = datatype.register_span
+    occ = occupied_addresses(slave, kind)
     address = start
     while address + step - 1 < REGISTER_COUNT:
-        if all(slave.get_point(address + i, kind) is None for i in range(step)):
+        if all((address + i) not in occ for i in range(step)):
             return address
         address += 1
     return None
@@ -93,8 +131,16 @@ def add_register_range(
         address = start + i * step
         try:
             validate_address(address, datatype)
+            validate_datatype_value(datatype, raw)
         except ValueError as exc:
             errors.append(f"Addr {address}: {exc}")
+            continue
+        clash = find_overlap(slave, address, kind, datatype)
+        if clash is not None:
+            errors.append(
+                f"Addr {address}: Addr {clash.address}"
+                f"（{clash.datatype.value}）と重複します"
+            )
             continue
         tag = f"{tag_prefix}{i}" if tag_prefix else ""
         slave.upsert_point(
@@ -165,8 +211,16 @@ def import_register_map_text(
                     "列数が不足しています（Addr/Kind/Datatype/Raw または Addr/Raw）"
                 )
             validate_address(address, datatype)
+            validate_datatype_value(datatype, raw)
         except ValueError as exc:
             errors.append(f"{line_no}行目: {exc}")
+            continue
+        clash = find_overlap(slave, address, kind, datatype, ignore_key=(address, kind))
+        if clash is not None:
+            errors.append(
+                f"{line_no}行目: Addr {address} は Addr {clash.address}"
+                f"（{clash.datatype.value}）と重複します"
+            )
             continue
         slave.upsert_point(
             RegisterPoint(address=address, kind=kind, datatype=datatype, tag=tag, raw=raw)

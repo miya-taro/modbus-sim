@@ -22,6 +22,7 @@ from modbus_sim.datastore import (
     parse_decoded_input,
     parse_raw_input,
     validate_address,
+    validate_datatype_value,
 )
 from modbus_sim.error_messages import friendly_server_error
 from modbus_sim.models import RegisterPoint
@@ -145,6 +146,7 @@ def _apply_point_body(existing: RegisterPoint | None, body: PointBody) -> Regist
 
     try:
         validate_address(point.address, datatype)
+        validate_datatype_value(datatype, point.raw)
     except ValueError as exc:
         raise HTTPException(400, str(exc)) from exc
     return point
@@ -334,8 +336,18 @@ def create_app(settings_path: Path | None = None) -> FastAPI:
             slave = reg.get_slave(slave_id)
         except KeyError as exc:
             raise HTTPException(404, str(exc)) from exc
-        existing = slave.get_point(body.address, kind_from_slug(body.kind))
+        kind = kind_from_slug(body.kind)
+        existing = slave.get_point(body.address, kind)
         point = _apply_point_body(existing, body)
+        clash = registry_ops.find_overlap(
+            slave, point.address, kind, point.datatype, ignore_key=(point.address, kind)
+        )
+        if clash is not None:
+            raise HTTPException(
+                400,
+                f"Addr {point.address} は Addr {clash.address}"
+                f"（{clash.datatype.value}, {clash.datatype.register_span}レジスタ）と重複します",
+            )
         slave.upsert_point(point)
         state.schedule_save()
         return point_to_dict(point)

@@ -2,7 +2,7 @@ import { useState } from "react";
 import { api } from "../api";
 import { useStore } from "../store";
 import { datatypeChoicesFor, defaultDatatypeFor } from "../kinds";
-import { formatDecodedDisplay, parseRawInput, validateAddress } from "../datatype";
+import { datatypeSpan, formatDecodedDisplay, parseRawInput, validateAddress } from "../datatype";
 import type { Datatype, KindSlug, Mode, PointDict } from "../types";
 
 interface Props {
@@ -181,7 +181,17 @@ function DraftRow({
     try {
       if (!addr.trim() || !Number.isInteger(a)) throw new Error("Addr を整数で入力してください");
       validateAddress(a, datatype);
-      if (existing.some((p) => p.address === a)) throw new Error(`Addr ${a} は既にあります`);
+      const span = datatypeSpan(datatype);
+      const clash = existing.find(
+        (p) => a < p.address + datatypeSpan(p.datatype) && p.address < a + span,
+      );
+      if (clash) {
+        throw new Error(
+          clash.address === a
+            ? `Addr ${a} は既にあります`
+            : `Addr ${a} は Addr ${clash.address} (${clash.datatype}) と重複します`,
+        );
+      }
       await api.upsertPoint(mode, slaveId, {
         address: a,
         kind,
