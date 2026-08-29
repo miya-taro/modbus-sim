@@ -109,7 +109,8 @@ temp/
 *.deb
 noto-cjk-extract/
 
-# CI からダウンロードしたビルド成果物
-/release/
-/release_v020/
+# CI からダウンロードしたビルド成果物・作業用出力
 /release*/
+scenario_out.json
+scen_out.json
+scen_err.txt
