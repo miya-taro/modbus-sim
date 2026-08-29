@@ -123,6 +123,8 @@ export const api = {
   stopServer: (mode: Mode) => req<ServerState>(`/api/server/${mode}/stop`, { method: "POST" }),
 
   clearLog: () => req<{ ok: boolean }>("/api/log/clear", { method: "POST" }),
+  saveLog: (path: string, lines: string[]) =>
+    req<{ ok: boolean }>("/api/log/save", jsonBody({ path, lines })),
 
   masterConnect: (body: {
     mode: Mode;

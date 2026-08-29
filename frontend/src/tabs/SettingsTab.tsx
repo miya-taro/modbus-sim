@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { api } from "../api";
 import { useStore } from "../store";
+import { JSON_FILTER, isDesktop, pickOpenPath, pickSavePath } from "../platform";
 import { IDENTITY_FIELDS, type DeviceIdentity } from "../types";
 
 const BAUD = [9600, 19200, 38400, 115200];
@@ -47,6 +48,20 @@ export function SettingsTab() {
       .putIdentity({ [key]: value })
       .then(setIdentity)
       .catch((e) => setError(String(e.message ?? e)));
+  };
+
+  const doExport = async () => {
+    const path = isDesktop()
+      ? await pickSavePath("modbus_sim_settings.json", JSON_FILTER)
+      : exportPath;
+    if (!path) return;
+    api.exportSettings(path).then(() => setError(null)).catch((e) => setError(String(e.message ?? e)));
+  };
+
+  const doImport = async () => {
+    const path = isDesktop() ? await pickOpenPath(JSON_FILTER) : exportPath;
+    if (!path) return;
+    api.importSettings(path).then(() => setError(null)).catch((e) => setError(String(e.message ?? e)));
   };
 
   const [form, setForm] = useState<Form>(DEFAULT_FORM);
@@ -221,32 +236,24 @@ export function SettingsTab() {
 
       <div className="card">
         <h3>エクスポート / インポート</h3>
-        <div className="form-row" style={{ gridTemplateColumns: "1fr" }}>
-          <input
-            value={exportPath}
-            onChange={(e) => setExportPath(e.target.value)}
-            placeholder="ファイルパス（例: C:\\Users\\me\\modbus_sim_settings.json）"
-          />
-        </div>
+        {!isDesktop() && (
+          <div className="form-row" style={{ gridTemplateColumns: "1fr" }}>
+            <input
+              value={exportPath}
+              onChange={(e) => setExportPath(e.target.value)}
+              placeholder="ファイルパス（例: C:\\Users\\me\\modbus_sim_settings.json）"
+            />
+          </div>
+        )}
         <div className="toolbar">
-          <button
-            onClick={() =>
-              api.exportSettings(exportPath).then(() => setError(null)).catch((e) => setError(String(e.message)))
-            }
-            disabled={!exportPath}
-          >
-            エクスポート
-          </button>
-          <button
-            onClick={() =>
-              api.importSettings(exportPath).then(() => setError(null)).catch((e) => setError(String(e.message)))
-            }
-            disabled={!exportPath || server.tcp_running || server.rtu_running}
-          >
-            インポート（停止中のみ）
+          <button onClick={doExport}>エクスポート…</button>
+          <button onClick={doImport} disabled={server.tcp_running || server.rtu_running}>
+            インポート…（停止中のみ）
           </button>
         </div>
-        <p className="hint">Tauri 版ではファイル選択ダイアログに置き換わります。現状はパス直接入力です。</p>
+        {!isDesktop() && (
+          <p className="hint">ブラウザ利用時はパスを直接入力してください。</p>
+        )}
       </div>
     </>
   );

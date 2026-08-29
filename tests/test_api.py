@@ -201,6 +201,20 @@ def test_widening_datatype_onto_neighbor_is_rejected(client):
     assert r.status_code == 400
 
 
+def test_log_save_with_and_without_lines(client, tmp_path):
+    p = tmp_path / "log.txt"
+    assert client.post("/api/log/save", json={"path": str(p), "lines": ["x", "y"]}).status_code == 200
+    assert p.read_text(encoding="utf-8") == "x\ny"
+    p2 = tmp_path / "log2.txt"
+    assert client.post("/api/log/save", json={"path": str(p2)}).status_code == 200
+    assert p2.exists()
+
+
+def test_log_save_bad_path_is_400(client):
+    r = client.post("/api/log/save", json={"path": "/nonexistent-dir-xyz/log.txt", "lines": ["a"]})
+    assert r.status_code == 400
+
+
 def test_server_start_stop(client):
     port = next(_PORTS)
     client.put("/api/settings", json={"tcp": {"host": "127.0.0.1", "port": port}})

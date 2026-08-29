@@ -1,10 +1,14 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "default",
-  "description": "デフォルト権限 + バックエンドサイドカーの起動",
+  "description": "デフォルト権限 + サイドカー起動 + ファイルダイアログ（ローカル配信ページから）",
   "windows": ["main"],
+  "remote": {
+    "urls": ["http://127.0.0.1:*", "http://localhost:*"]
+  },
   "permissions": [
     "core:default",
+    "dialog:default",
     {
       "identifier": "shell:allow-execute",
       "allow": [

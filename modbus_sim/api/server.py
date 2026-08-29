@@ -108,6 +108,11 @@ class PathBody(BaseModel):
     path: str
 
 
+class LogSaveBody(BaseModel):
+    path: str
+    lines: list[str] | None = None
+
+
 class MasterConnectBody(BaseModel):
     mode: str
     host: str | None = None
@@ -524,6 +529,15 @@ def create_app(settings_path: Path | None = None) -> FastAPI:
     async def clear_log() -> dict:
         state.clear_log()
         await hub.broadcast({"type": "tick", "log": state.log_payload()})
+        return {"ok": True}
+
+    @app.post("/api/log/save")
+    async def save_log(body: LogSaveBody) -> dict:
+        text = "\n".join(body.lines if body.lines is not None else state.log_lines())
+        try:
+            Path(body.path).write_text(text, encoding="utf-8")
+        except OSError as exc:
+            raise HTTPException(400, f"ログの保存に失敗しました: {exc}") from exc
         return {"ok": True}
 
     # --- master (client) --------------------------------------

@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { api } from "../api";
 import { useStore } from "../store";
+import { TXT_FILTER, isDesktop, pickSavePath } from "../platform";
 
 const PLACEHOLDER = [
   "# ログ出力例",
@@ -49,7 +50,13 @@ export function LogTab() {
     setPaused(!paused);
   };
 
-  const save = () => {
+  const save = async () => {
+    if (isDesktop()) {
+      const path = await pickSavePath("modbus_sim_log.txt", TXT_FILTER);
+      if (!path) return;
+      api.saveLog(path, lines).catch((e) => setError(String((e as Error).message ?? e)));
+      return;
+    }
     const blob = new Blob([lines.join("\n")], { type: "text/plain" });
     const url = URL.createObjectURL(blob);
     const a = document.createElement("a");
