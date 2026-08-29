@@ -3,6 +3,7 @@ import { Header } from "./components/Header";
 import { Modal } from "./components/Modal";
 import { SettingsTab } from "./tabs/SettingsTab";
 import { SlaveTab } from "./tabs/SlaveTab";
+import { MasterTab } from "./tabs/MasterTab";
 import { LogTab } from "./tabs/LogTab";
 import { useStore, type TabKey } from "./store";
 
@@ -10,6 +11,7 @@ const TABS: { key: TabKey; label: string }[] = [
   { key: "settings", label: "通信設定" },
   { key: "tcp", label: "TCP スレーブ" },
   { key: "rtu", label: "RTU スレーブ" },
+  { key: "master", label: "マスター" },
   { key: "log", label: "通信ログ" },
 ];
 
@@ -45,6 +47,7 @@ export default function App() {
         {activeTab === "settings" && <SettingsTab />}
         {activeTab === "tcp" && <SlaveTab mode="tcp" />}
         {activeTab === "rtu" && <SlaveTab mode="rtu" />}
+        {activeTab === "master" && <MasterTab />}
         {activeTab === "log" && <LogTab />}
       </div>
       {confirmState && (

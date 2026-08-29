@@ -6,11 +6,24 @@ import type {
   FaultMode,
   FullState,
   KindSlug,
+  MasterResult,
+  MasterState,
   Mode,
   ModeState,
   PointDict,
   ServerState,
 } from "./types";
+
+export interface MasterRequestArgs {
+  function: string;
+  device_id: number;
+  address: number;
+  count?: number;
+  datatype?: string;
+  word_order?: string;
+  values?: number[] | null;
+  interval_ms?: number;
+}
 
 export interface UpsertBody {
   address: number;
@@ -109,6 +122,21 @@ export const api = {
   stopServer: (mode: Mode) => req<ServerState>(`/api/server/${mode}/stop`, { method: "POST" }),
 
   clearLog: () => req<{ ok: boolean }>("/api/log/clear", { method: "POST" }),
+
+  masterConnect: (body: {
+    mode: Mode;
+    host?: string;
+    port?: number;
+    rtu_port?: string;
+    baudrate?: number;
+    parity?: string;
+    bytesize?: number;
+    stopbits?: number;
+  }) => req<MasterState>("/api/master/connect", jsonBody(body)),
+  masterDisconnect: () => req<MasterState>("/api/master/disconnect", { method: "POST" }),
+  masterRequest: (body: MasterRequestArgs) => req<MasterResult>("/api/master/request", jsonBody(body)),
+  masterPoll: (body: MasterRequestArgs) => req<MasterState>("/api/master/poll", jsonBody(body)),
+  masterPollStop: () => req<MasterState>("/api/master/poll/stop", { method: "POST" }),
 
   exportSettings: (path: string) => req<{ ok: boolean }>("/api/settings/export", jsonBody({ path })),
   importSettings: (path: string) => req<{ ok: boolean }>("/api/settings/import", jsonBody({ path })),

@@ -94,11 +94,40 @@ export const IDENTITY_FIELDS: { key: keyof DeviceIdentity; label: string }[] = [
   { key: "user_application_name", label: "UserApplicationName" },
 ];
 
+export interface MasterState {
+  connected: boolean;
+  mode: Mode | null;
+  target: string;
+  polling: boolean;
+  poll: Record<string, unknown> | null;
+}
+
+export interface MasterResult {
+  ok: boolean;
+  error?: string;
+  exception_code?: number | null;
+  raw: number[];
+  values: (number | boolean)[];
+}
+
+export const MASTER_FUNCTIONS: { value: string; label: string; write: boolean }[] = [
+  { value: "read_coils", label: "01 Read Coils", write: false },
+  { value: "read_discrete_inputs", label: "02 Read Discrete Inputs", write: false },
+  { value: "read_holding_registers", label: "03 Read Holding Registers", write: false },
+  { value: "read_input_registers", label: "04 Read Input Registers", write: false },
+  { value: "write_coil", label: "05 Write Single Coil", write: true },
+  { value: "write_register", label: "06 Write Single Register", write: true },
+  { value: "write_coils", label: "15 Write Multiple Coils", write: true },
+  { value: "write_registers", label: "16 Write Multiple Registers", write: true },
+];
+
 export interface FullState {
   type: "state";
   server: ServerState;
   settings: CommSettings;
   identity: DeviceIdentity;
+  master: MasterState;
+  master_log: { lines: string[] };
   tcp: ModeState;
   rtu: ModeState;
   log: { lines: string[]; total_count: number };
@@ -111,6 +140,14 @@ export interface TickMessage {
   tcp_points?: ModeState;
   rtu_points?: ModeState;
   log?: { lines: string[]; total_count: number };
+  master?: MasterState;
+  master_log?: { lines: string[] };
+}
+
+export interface MasterResultMessage {
+  type: "master_result";
+  result: MasterResult;
+  poll: boolean;
 }
 
 export const KIND_LABELS: Record<KindSlug, string> = {

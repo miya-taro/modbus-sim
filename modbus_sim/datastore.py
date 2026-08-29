@@ -794,6 +794,39 @@ def _raw_values_equal(point: RegisterPoint, latest: int | float) -> bool:
     return int(point.raw) == int(latest)
 
 
+def registers_to_values(
+    registers: list[int],
+    datatype: ValueKind,
+    word_order: WordOrder = WordOrder.ABCD,
+) -> list[int | float]:
+    """16bit レジスタ列を datatype に応じた値のリストへ（マスター読み取り用）。"""
+    span = datatype.register_span
+    out: list[int | float] = []
+    for i in range(0, len(registers) - span + 1, span):
+        group = [int(r) & 0xFFFF for r in registers[i : i + span]]
+        if span >= 2:
+            out.append(struct.unpack(_STRUCT_FMT[datatype], unpack_bytes(group, word_order))[0])
+        else:
+            v = group[0]
+            out.append(v - 0x10000 if datatype == ValueKind.INT16 and v >= 0x8000 else v)
+    return out
+
+
+def value_to_registers(
+    value: int | float,
+    datatype: ValueKind,
+    word_order: WordOrder = WordOrder.ABCD,
+) -> list[int]:
+    """単一の値を書き込み用の 16bit レジスタ列へ（マスター書き込み用）。"""
+    canonical = _canonical_bytes(datatype, value)
+    if canonical is not None:
+        return pack_words(canonical, word_order)
+    iv = int(value)
+    if datatype == ValueKind.INT16 and iv < 0:
+        iv &= 0xFFFF
+    return [iv & 0xFFFF]
+
+
 def format_decoded_display(
     point: RegisterPoint, word_order: WordOrder = WordOrder.ABCD
 ) -> str:

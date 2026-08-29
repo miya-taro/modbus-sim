@@ -20,7 +20,16 @@ from pydantic import BaseModel
 from modbus_sim import registry_ops
 from modbus_sim.api.hub import Hub
 from modbus_sim.api.state import AppState, kind_from_slug, point_to_dict
-from modbus_sim.config import AutoMode, FaultException, FaultMode, FrameFault, ValueKind
+from modbus_sim.config import (
+    AutoMode,
+    FaultException,
+    FaultMode,
+    FrameFault,
+    Parity,
+    RtuConfig,
+    TcpConfig,
+    ValueKind,
+)
 from modbus_sim.datastore import (
     parse_decoded_input,
     parse_raw_input,
@@ -97,6 +106,28 @@ class DuplicateBody(BaseModel):
 
 class PathBody(BaseModel):
     path: str
+
+
+class MasterConnectBody(BaseModel):
+    mode: str
+    host: str | None = None
+    port: int | None = None
+    rtu_port: str | None = None
+    baudrate: int | None = None
+    parity: str | None = None
+    bytesize: int | None = None
+    stopbits: int | None = None
+
+
+class MasterRequestBody(BaseModel):
+    function: str
+    device_id: int = 1
+    address: int = 0
+    count: int = 1
+    datatype: str = "uint16"
+    word_order: str = "ABCD"
+    values: list[float] | None = None
+    interval_ms: int | None = None
 
 
 def _apply_point_body(
@@ -195,6 +226,8 @@ def create_app(settings_path: Path | None = None) -> FastAPI:
             except Exception:  # noqa: BLE001 - poller は落とさない
                 log.exception("poller tick failed")
 
+    state.attach_broadcast(hub.broadcast)
+
     @contextlib.asynccontextmanager
     async def lifespan(_app: FastAPI):
         task = asyncio.create_task(poller())
@@ -204,6 +237,10 @@ def create_app(settings_path: Path | None = None) -> FastAPI:
             task.cancel()
             with contextlib.suppress(asyncio.CancelledError):
                 await task
+            with contextlib.suppress(Exception):
+                await state.stop_poll()
+            with contextlib.suppress(Exception):
+                await state.master.disconnect()
             with contextlib.suppress(Exception):
                 await state.manager.stop_all()
 
@@ -488,6 +525,84 @@ def create_app(settings_path: Path | None = None) -> FastAPI:
         state.clear_log()
         await hub.broadcast({"type": "tick", "log": state.log_payload()})
         return {"ok": True}
+
+    # --- master (client) --------------------------------------
+    def _request_kwargs(body: MasterRequestBody) -> dict:
+        try:
+            datatype = ValueKind(body.datatype)
+            word_order = WordOrder(body.word_order)
+        except ValueError as exc:
+            raise HTTPException(400, str(exc)) from exc
+        return {
+            "function": body.function,
+            "device_id": body.device_id,
+            "address": body.address,
+            "count": body.count,
+            "datatype": datatype,
+            "word_order": word_order,
+            "values": body.values,
+        }
+
+    @app.get("/api/master")
+    async def get_master() -> dict:
+        return state.master_snapshot()
+
+    @app.post("/api/master/connect")
+    async def master_connect(body: MasterConnectBody) -> dict:
+        try:
+            if body.mode == "tcp":
+                if not body.host or body.port is None:
+                    raise ValueError("host / port を指定してください")
+                await state.master.connect_tcp(TcpConfig(host=body.host, port=int(body.port)))
+            elif body.mode == "rtu":
+                if not body.rtu_port:
+                    raise ValueError("シリアルポートを指定してください")
+                await state.master.connect_rtu(
+                    RtuConfig(
+                        port=body.rtu_port,
+                        baudrate=body.baudrate or 9600,
+                        parity=Parity(body.parity or "Even"),
+                        bytesize=body.bytesize or 8,
+                        stopbits=body.stopbits or 1,
+                    )
+                )
+            else:
+                raise ValueError(f"未知の mode: {body.mode}")
+        except (ValueError, ConnectionError) as exc:
+            raise HTTPException(400, str(exc)) from exc
+        except Exception as exc:  # noqa: BLE001
+            raise HTTPException(400, friendly_server_error(exc)) from exc
+        state._mark_dirty("master_state")
+        return state.master_snapshot()
+
+    @app.post("/api/master/disconnect")
+    async def master_disconnect() -> dict:
+        await state.stop_poll()
+        await state.master.disconnect()
+        state._mark_dirty("master_state")
+        return state.master_snapshot()
+
+    @app.post("/api/master/request")
+    async def master_request(body: MasterRequestBody) -> dict:
+        try:
+            return await state.master.request(**_request_kwargs(body))
+        except (ValueError, ConnectionError) as exc:
+            raise HTTPException(400, str(exc)) from exc
+
+    @app.post("/api/master/poll")
+    async def master_poll(body: MasterRequestBody) -> dict:
+        kwargs = _request_kwargs(body)
+        if not state.master.connected:
+            raise HTTPException(400, "マスターが接続されていません")
+        await state.start_poll(kwargs, body.interval_ms or 1000)
+        state._mark_dirty("master_state")
+        return state.master_snapshot()
+
+    @app.post("/api/master/poll/stop")
+    async def master_poll_stop() -> dict:
+        await state.stop_poll()
+        state._mark_dirty("master_state")
+        return state.master_snapshot()
 
     # --- websocket -------------------------------------------
     @app.websocket("/ws")

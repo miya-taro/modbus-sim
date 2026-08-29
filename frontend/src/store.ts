@@ -4,11 +4,22 @@ import type {
   CommSettings,
   DeviceIdentity,
   FullState,
+  MasterResult,
+  MasterResultMessage,
+  MasterState,
   Mode,
   ModeState,
   ServerState,
   TickMessage,
 } from "./types";
+
+const DEFAULT_MASTER: MasterState = {
+  connected: false,
+  mode: null,
+  target: "",
+  polling: false,
+  poll: null,
+};
 
 const DEFAULT_IDENTITY: DeviceIdentity = {
   vendor_name: "",
@@ -20,13 +31,16 @@ const DEFAULT_IDENTITY: DeviceIdentity = {
   user_application_name: "",
 };
 
-export type TabKey = "settings" | "tcp" | "rtu" | "log";
+export type TabKey = "settings" | "tcp" | "rtu" | "master" | "log";
 
 interface State {
   connected: boolean;
   server: ServerState;
   settings: CommSettings;
   identity: DeviceIdentity;
+  master: MasterState;
+  masterLog: string[];
+  masterResult: MasterResult | null;
   tcp: ModeState;
   rtu: ModeState;
   log: { lines: string[]; total_count: number };
@@ -45,6 +59,8 @@ interface State {
   setSettings: (s: CommSettings) => void;
   setIdentity: (i: DeviceIdentity) => void;
   setServer: (s: ServerState) => void;
+  setMaster: (m: MasterState) => void;
+  setMasterResult: (r: MasterResult) => void;
 }
 
 const emptyMode = (mode: Mode): ModeState => ({
@@ -64,6 +80,9 @@ export const useStore = create<State>((set, get) => ({
   server: { tcp_running: false, rtu_running: false, tcp_client_count: 0 },
   settings: {},
   identity: DEFAULT_IDENTITY,
+  master: DEFAULT_MASTER,
+  masterLog: [],
+  masterResult: null,
   tcp: emptyMode("tcp"),
   rtu: emptyMode("rtu"),
   log: { lines: [], total_count: 0 },
@@ -86,6 +105,8 @@ export const useStore = create<State>((set, get) => ({
       server: s.server,
       settings: s.settings ?? {},
       identity: s.identity ?? DEFAULT_IDENTITY,
+      master: s.master ?? DEFAULT_MASTER,
+      masterLog: s.master_log?.lines ?? [],
       tcp: s.tcp,
       rtu: s.rtu,
       log: s.log,
@@ -95,6 +116,8 @@ export const useStore = create<State>((set, get) => ({
   setSettings: (s) => set({ settings: s }),
   setIdentity: (i) => set({ identity: i }),
   setServer: (s) => set({ server: s }),
+  setMaster: (m) => set({ master: m }),
+  setMasterResult: (r) => set({ masterResult: r }),
 
   refreshMode: async (mode) => {
     try {
@@ -125,14 +148,20 @@ export const useStore = create<State>((set, get) => ({
     };
     ws.onerror = () => ws?.close();
     ws.onmessage = (ev) => {
-      const msg = JSON.parse(ev.data) as FullState | TickMessage;
+      const msg = JSON.parse(ev.data) as FullState | TickMessage | MasterResultMessage;
       if (msg.type === "state") {
         get().applyFullState(msg);
+        return;
+      }
+      if (msg.type === "master_result") {
+        set({ masterResult: msg.result });
         return;
       }
       const patch: Partial<State> = {};
       if (msg.server) patch.server = msg.server;
       if (msg.log) patch.log = msg.log;
+      if (msg.master) patch.master = msg.master;
+      if (msg.master_log) patch.masterLog = msg.master_log.lines;
       // tick の *_points は選択中スレーブ分しか含まないので points はマージする
       const mergePoints = (prev: ModeState, next: ModeState): ModeState => ({
         ...next,

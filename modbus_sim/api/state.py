@@ -3,9 +3,13 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
+from collections import deque
+from collections.abc import Awaitable, Callable
 from pathlib import Path
 
 from modbus_sim.config import CommMode, RegisterKind
+from modbus_sim.master import ModbusMaster
 from modbus_sim.datastore import (
     SlaveRegistry,
     decode_value,
@@ -85,7 +89,17 @@ class AppState:
         self._dirty: set[str] = {"server_state", "log"}
         self._last_log_count = 0
 
+        # --- master (client) ---
+        self.master = ModbusMaster(on_log=self._on_master_log)
+        self._master_log: deque[str] = deque(maxlen=500)
+        self._poll_task: asyncio.Task | None = None
+        self._poll_params: dict | None = None
+        self._broadcast: Callable[[dict], Awaitable[None]] | None = None
+
         self.load_settings()
+
+    def attach_broadcast(self, fn: Callable[[dict], Awaitable[None]]) -> None:
+        self._broadcast = fn
 
     # --- registry helpers -------------------------------------------------
     def registry(self, mode: str) -> SlaveRegistry:
@@ -149,6 +163,39 @@ class AppState:
     # --- dirty flags / broadcast --------------------------------------
     def _on_log(self, _msg: str) -> None:
         self._mark_dirty("log")
+
+    def _on_master_log(self, line: str) -> None:
+        self._master_log.append(line)
+        self._mark_dirty("master_log")
+
+    # --- master ----------------------------------------------------
+    def master_log_payload(self) -> dict:
+        return {"lines": list(self._master_log)}
+
+    def master_snapshot(self) -> dict:
+        return {**self.master.describe(), "polling": self._poll_task is not None, "poll": self._poll_params}
+
+    async def stop_poll(self) -> None:
+        task, self._poll_task, self._poll_params = self._poll_task, None, None
+        if task is not None:
+            task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await task
+
+    async def start_poll(self, params: dict, interval_ms: int) -> None:
+        await self.stop_poll()
+        self._poll_params = {**params, "interval_ms": interval_ms}
+        self._poll_task = asyncio.create_task(self._poll_loop(params, max(50, interval_ms) / 1000))
+
+    async def _poll_loop(self, params: dict, interval: float) -> None:
+        while True:
+            try:
+                result = await self.master.request(**params)
+            except Exception as exc:  # noqa: BLE001
+                result = {"ok": False, "error": str(exc), "raw": [], "values": []}
+            if self._broadcast is not None:
+                await self._broadcast({"type": "master_result", "result": result, "poll": True})
+            await asyncio.sleep(interval)
 
     def _mark_dirty(self, key: str) -> None:
         self._dirty.add(key)
@@ -228,6 +275,8 @@ class AppState:
                 "lines": self.log_lines(),
                 "total_count": self.manager.total_log_count,
             },
+            "master": self.master_snapshot(),
+            "master_log": self.master_log_payload(),
         }
 
     def mode_state(self, mode: str, *, all_slaves: bool = True) -> dict:
@@ -258,4 +307,7 @@ class AppState:
         if "log" in dirty or self.manager.total_log_count != self._last_log_count:
             self._last_log_count = self.manager.total_log_count
             msg["log"] = self.log_payload()
+        if "master_log" in dirty or "master_state" in dirty:
+            msg["master"] = self.master_snapshot()
+            msg["master_log"] = self.master_log_payload()
         return msg
