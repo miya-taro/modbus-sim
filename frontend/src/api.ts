@@ -2,6 +2,7 @@ import type {
   AutoMode,
   CommSettings,
   Datatype,
+  DeviceIdentity,
   FaultMode,
   FullState,
   KindSlug,
@@ -58,6 +59,10 @@ export const api = {
 
   getSettings: () => req<CommSettings>("/api/settings"),
   putSettings: (s: CommSettings) => req<CommSettings>("/api/settings", { method: "PUT", body: JSON.stringify(s) }),
+
+  getIdentity: () => req<DeviceIdentity>("/api/identity"),
+  putIdentity: (patch: Partial<DeviceIdentity>) =>
+    req<DeviceIdentity>("/api/identity", { method: "PUT", body: JSON.stringify(patch) }),
 
   listSlaves: (mode: Mode) => req<ModeState>(`/api/slaves/${mode}`),
   addSlave: (mode: Mode, id: number) => req<ModeState>(`/api/slaves/${mode}`, jsonBody({ id })),

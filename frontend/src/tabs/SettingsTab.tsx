@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { api } from "../api";
 import { useStore } from "../store";
+import { IDENTITY_FIELDS, type DeviceIdentity } from "../types";
 
 const BAUD = [9600, 19200, 38400, 115200];
 const PARITY = ["None", "Even", "Odd"];
@@ -28,8 +29,25 @@ const DEFAULT_FORM: Form = {
 };
 
 export function SettingsTab() {
-  const { settings, server, setSettings, setError } = useStore();
+  const { settings, identity, server, setSettings, setIdentity, setError } = useStore();
   const locked = { tcp: server.tcp_running, rtu: server.rtu_running };
+  const serverRunning = server.tcp_running || server.rtu_running;
+
+  const [ident, setIdent] = useState<DeviceIdentity>(identity);
+  const identHydrated = useRef(false);
+  useEffect(() => {
+    if (identHydrated.current) return;
+    identHydrated.current = true;
+    setIdent(identity);
+  }, [identity]);
+
+  const saveIdentityField = (key: keyof DeviceIdentity, value: string) => {
+    if (value === identity[key]) return;
+    api
+      .putIdentity({ [key]: value })
+      .then(setIdentity)
+      .catch((e) => setError(String(e.message ?? e)));
+  };
 
   const [form, setForm] = useState<Form>(DEFAULT_FORM);
   const [binds, setBinds] = useState<string[]>([]);
@@ -183,6 +201,22 @@ export function SettingsTab() {
       <div className="card">
         <h3>現在の設定</h3>
         <pre style={{ margin: 0 }}>{summary}</pre>
+      </div>
+
+      <div className="card">
+        <h3>機器識別 (FC 43 / Read Device Identification)</h3>
+        {IDENTITY_FIELDS.map(({ key, label }) => (
+          <div className="form-row" key={key}>
+            <label>{label}</label>
+            <input
+              value={ident[key]}
+              disabled={serverRunning}
+              onChange={(e) => setIdent((f) => ({ ...f, [key]: e.target.value }))}
+              onBlur={(e) => saveIdentityField(key, e.target.value)}
+            />
+          </div>
+        ))}
+        <p className="hint">サーバー停止中のみ変更できます。FC 8（Diagnostics）は追加設定なしで応答します。</p>
       </div>
 
       <div className="card">

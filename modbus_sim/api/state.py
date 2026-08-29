@@ -13,6 +13,7 @@ from modbus_sim.datastore import (
     rtu_registry,
     tcp_registry,
 )
+from modbus_sim.identity import DeviceIdentity
 from modbus_sim.models import CommSettings, RegisterPoint
 from modbus_sim.wordorder import WordOrder
 from modbus_sim.server_manager import ModbusServerManager
@@ -69,6 +70,7 @@ class AppState:
         self.tcp_registry: SlaveRegistry = tcp_registry
         self.rtu_registry: SlaveRegistry = rtu_registry
         self.comm = CommSettings()
+        self.identity = DeviceIdentity()
         self.settings_store = SettingsStore(settings_path)
         self._save_task: asyncio.Task | None = None
 
@@ -97,6 +99,8 @@ class AppState:
     def load_settings(self) -> None:
         data = self.settings_store.load()
         apply_dict_to_comm(self.comm, data)
+        if "identity" in data:
+            self.identity = DeviceIdentity.from_dict(data["identity"])
         if "tcp_slaves" in data:
             self.tcp_registry.load_from_dict(
                 {
@@ -119,6 +123,7 @@ class AppState:
         return {
             "tcp": panel.get("tcp", {}),
             "rtu": panel.get("rtu", {}),
+            "identity": self.identity.to_dict(),
             "tcp_slaves": self.tcp_registry.to_dict()["slaves"],
             "tcp_selected_slave_id": self.tcp_registry.selected_slave_id,
             "rtu_slaves": self.rtu_registry.to_dict()["slaves"],
@@ -212,6 +217,7 @@ class AppState:
             "type": "state",
             "server": self.server_state(),
             "settings": comm_to_dict(self.comm),
+            "identity": self.identity.to_dict(),
             "tcp": self.mode_state("tcp"),
             "rtu": self.mode_state("rtu"),
             "log": {

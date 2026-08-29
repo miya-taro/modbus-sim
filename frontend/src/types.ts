@@ -64,10 +64,31 @@ export interface CommSettings {
   };
 }
 
+export interface DeviceIdentity {
+  vendor_name: string;
+  product_code: string;
+  major_minor_revision: string;
+  vendor_url: string;
+  product_name: string;
+  model_name: string;
+  user_application_name: string;
+}
+
+export const IDENTITY_FIELDS: { key: keyof DeviceIdentity; label: string }[] = [
+  { key: "vendor_name", label: "VendorName" },
+  { key: "product_code", label: "ProductCode" },
+  { key: "major_minor_revision", label: "MajorMinorRevision" },
+  { key: "vendor_url", label: "VendorUrl" },
+  { key: "product_name", label: "ProductName" },
+  { key: "model_name", label: "ModelName" },
+  { key: "user_application_name", label: "UserApplicationName" },
+];
+
 export interface FullState {
   type: "state";
   server: ServerState;
   settings: CommSettings;
+  identity: DeviceIdentity;
   tcp: ModeState;
   rtu: ModeState;
   log: { lines: string[]; total_count: number };

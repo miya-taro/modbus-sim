@@ -139,13 +139,14 @@ class ModbusServerManager:
 
         return _trace_connect
 
-    async def start_tcp(self, config: TcpConfig) -> None:
+    async def start_tcp(self, config: TcpConfig, identity=None) -> None:
         if self.tcp_running:
             raise RuntimeError("TCP server is already running")
         self.tcp_client_count = 0
         server = LoggingModbusTcpServer(
             self._tcp_registry.build_sim_devices(),
             address=(config.host, config.port),
+            identity=identity,
             trace_packet=self._make_trace_packet(CommMode.TCP),
             trace_connect=self._make_trace_connect(),
             on_invalid=self._make_on_invalid(CommMode.TCP),
@@ -164,7 +165,7 @@ class ModbusServerManager:
             f"{config.host}:{config.port}"
         )
 
-    async def start_rtu(self, config: RtuConfig) -> None:
+    async def start_rtu(self, config: RtuConfig, identity=None) -> None:
         if self.rtu_running:
             raise RuntimeError("RTU server is already running")
         server = LoggingModbusSerialServer(
@@ -174,6 +175,7 @@ class ModbusServerManager:
             parity=config.parity.to_pyserial(),
             bytesize=config.bytesize,
             stopbits=config.stopbits,
+            identity=identity,
             trace_packet=self._make_trace_packet(CommMode.RTU),
             on_invalid=self._make_on_invalid(CommMode.RTU),
         )

@@ -28,6 +28,7 @@ from modbus_sim.datastore import (
     validate_datatype_value,
 )
 from modbus_sim.error_messages import friendly_server_error
+from modbus_sim.identity import DeviceIdentity
 from modbus_sim.models import RegisterPoint
 from modbus_sim.network import list_bind_addresses
 from modbus_sim.settings_model import (
@@ -247,6 +248,18 @@ def create_app(settings_path: Path | None = None) -> FastAPI:
         state.schedule_save()
         return comm_to_dict(state.comm)
 
+    @app.get("/api/identity")
+    async def get_identity() -> dict:
+        return state.identity.to_dict()
+
+    @app.put("/api/identity")
+    async def put_identity(body: dict = Body(...)) -> dict:
+        if state.manager.any_running:
+            raise HTTPException(409, "機器識別はサーバー停止中のみ変更できます。")
+        state.identity = DeviceIdentity.from_dict({**state.identity.to_dict(), **body})
+        state.schedule_save()
+        return state.identity.to_dict()
+
     @app.post("/api/settings/export")
     async def export_settings(body: PathBody) -> dict:
         try:
@@ -266,6 +279,8 @@ def create_app(settings_path: Path | None = None) -> FastAPI:
         if not isinstance(data, dict):
             raise HTTPException(400, "設定ファイルの形式が不正です")
         apply_dict_to_comm(state.comm, data)
+        if "identity" in data:
+            state.identity = DeviceIdentity.from_dict(data["identity"])
         if "tcp_slaves" in data or "slaves" in data:
             state.tcp_registry.load_from_dict(
                 {
@@ -438,11 +453,12 @@ def create_app(settings_path: Path | None = None) -> FastAPI:
     @app.post("/api/server/{mode}/start")
     async def start_server(mode: str) -> dict:
         _check_mode(mode)
+        ident = state.identity.to_pymodbus()
         try:
             if mode == "tcp":
-                await state.manager.start_tcp(comm_to_tcp_config(state.comm))
+                await state.manager.start_tcp(comm_to_tcp_config(state.comm), ident)
             else:
-                await state.manager.start_rtu(comm_to_rtu_config(state.comm))
+                await state.manager.start_rtu(comm_to_rtu_config(state.comm), ident)
         except ValueError as exc:
             raise HTTPException(400, str(exc)) from exc
         except Exception as exc:  # noqa: BLE001

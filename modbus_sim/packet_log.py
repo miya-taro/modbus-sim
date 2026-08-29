@@ -11,8 +11,16 @@ _FC_NAMES = {
     0x04: "ReadInputRegisters",
     0x05: "WriteSingleCoil",
     0x06: "WriteSingleRegister",
+    0x07: "ReadExceptionStatus",
+    0x08: "Diagnostics",
+    0x0B: "GetCommEventCounter",
+    0x0C: "GetCommEventLog",
     0x0F: "WriteMultipleCoils",
     0x10: "WriteMultipleRegisters",
+    0x11: "ReportServerId",
+    0x16: "MaskWriteRegister",
+    0x17: "ReadWriteMultipleRegisters",
+    0x2B: "ReadDeviceIdentification",
 }
 
 

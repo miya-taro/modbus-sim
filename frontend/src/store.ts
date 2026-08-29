@@ -2,6 +2,7 @@ import { create } from "zustand";
 import { api } from "./api";
 import type {
   CommSettings,
+  DeviceIdentity,
   FullState,
   Mode,
   ModeState,
@@ -9,12 +10,23 @@ import type {
   TickMessage,
 } from "./types";
 
+const DEFAULT_IDENTITY: DeviceIdentity = {
+  vendor_name: "",
+  product_code: "",
+  major_minor_revision: "",
+  vendor_url: "",
+  product_name: "",
+  model_name: "",
+  user_application_name: "",
+};
+
 export type TabKey = "settings" | "tcp" | "rtu" | "log";
 
 interface State {
   connected: boolean;
   server: ServerState;
   settings: CommSettings;
+  identity: DeviceIdentity;
   tcp: ModeState;
   rtu: ModeState;
   log: { lines: string[]; total_count: number };
@@ -31,6 +43,7 @@ interface State {
   refreshMode: (mode: Mode) => Promise<void>;
   setModeState: (mode: Mode, ms: ModeState) => void;
   setSettings: (s: CommSettings) => void;
+  setIdentity: (i: DeviceIdentity) => void;
   setServer: (s: ServerState) => void;
 }
 
@@ -48,6 +61,7 @@ export const useStore = create<State>((set, get) => ({
   connected: false,
   server: { tcp_running: false, rtu_running: false, tcp_client_count: 0 },
   settings: {},
+  identity: DEFAULT_IDENTITY,
   tcp: emptyMode("tcp"),
   rtu: emptyMode("rtu"),
   log: { lines: [], total_count: 0 },
@@ -69,6 +83,7 @@ export const useStore = create<State>((set, get) => ({
     set({
       server: s.server,
       settings: s.settings ?? {},
+      identity: s.identity ?? DEFAULT_IDENTITY,
       tcp: s.tcp,
       rtu: s.rtu,
       log: s.log,
@@ -76,6 +91,7 @@ export const useStore = create<State>((set, get) => ({
 
   setModeState: (mode, ms) => set({ [mode]: ms } as Pick<State, "tcp" | "rtu">),
   setSettings: (s) => set({ settings: s }),
+  setIdentity: (i) => set({ identity: i }),
   setServer: (s) => set({ server: s }),
 
   refreshMode: async (mode) => {
