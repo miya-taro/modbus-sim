@@ -187,15 +187,19 @@ class AppState:
         return {
             "mode": mode,
             "selected_slave_id": reg.selected_slave_id,
-            "slaves": [
-                {
-                    "id": sid,
-                    "tag": reg.get_tag(sid),
-                    "word_order": reg.get_word_order(sid).value,
-                    "activity": reg.activity_state(sid, any_server_running=running),
-                }
-                for sid in reg.list_slave_ids()
-            ],
+            "slaves": [self._slave_dict(reg, sid, running) for sid in reg.list_slave_ids()],
+        }
+
+    @staticmethod
+    def _slave_dict(reg: SlaveRegistry, sid: int, running: bool) -> dict:
+        fault, rate = reg.frame_fault_for(sid)
+        return {
+            "id": sid,
+            "tag": reg.get_tag(sid),
+            "word_order": reg.get_word_order(sid).value,
+            "frame_fault": fault.value,
+            "frame_fault_rate": rate,
+            "activity": reg.activity_state(sid, any_server_running=running),
         }
 
     def points_snapshot(self, mode: str, slave_id: int, kind: RegisterKind | None = None) -> list[dict]:

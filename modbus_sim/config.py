@@ -55,6 +55,15 @@ class FaultMode(str, Enum):
     NO_RESPONSE = "no_response"
 
 
+class FrameFault(str, Enum):
+    """スレーブ単位のパケットレベル異常注入（全 FC の応答フレームが対象）。"""
+
+    NONE = "none"
+    BAD_CRC = "bad_crc"    # RTU: CRC 破壊 / TCP: MBAP length 破壊
+    TRUNCATE = "truncate"  # 末尾数バイトを欠落
+    DROP = "drop"          # フレームを送信しない（マスタはタイムアウト）
+
+
 class FaultException(str, Enum):
     """FaultMode.EXCEPTION 時に返す Modbus 例外コード。"""
 

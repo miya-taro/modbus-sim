@@ -20,7 +20,7 @@ from pydantic import BaseModel
 from modbus_sim import registry_ops
 from modbus_sim.api.hub import Hub
 from modbus_sim.api.state import AppState, kind_from_slug, point_to_dict
-from modbus_sim.config import AutoMode, FaultException, FaultMode, ValueKind
+from modbus_sim.config import AutoMode, FaultException, FaultMode, FrameFault, ValueKind
 from modbus_sim.datastore import (
     parse_decoded_input,
     parse_raw_input,
@@ -55,6 +55,8 @@ class SlavePatchBody(BaseModel):
     tag: str | None = None
     selected: bool | None = None
     word_order: str | None = None
+    frame_fault: str | None = None
+    frame_fault_rate: float | None = None
 
 
 class PointBody(BaseModel):
@@ -340,6 +342,13 @@ def create_app(settings_path: Path | None = None) -> FastAPI:
                 reg.set_word_order(slave_id, WordOrder(body.word_order))
             except ValueError:
                 raise HTTPException(400, f"未知の word_order: {body.word_order}") from None
+        if body.frame_fault is not None or body.frame_fault_rate is not None:
+            try:
+                cur, _ = reg.frame_fault_for(slave_id)
+                fault = FrameFault(body.frame_fault) if body.frame_fault is not None else cur
+            except ValueError:
+                raise HTTPException(400, f"未知の frame_fault: {body.frame_fault}") from None
+            reg.set_frame_fault(slave_id, fault, body.frame_fault_rate)
         state.schedule_save()
         return state.slaves_snapshot(mode)
 

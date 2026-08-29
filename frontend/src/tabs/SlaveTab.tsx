@@ -4,8 +4,8 @@ import { useStore } from "../store";
 import { RegisterGrid } from "../components/RegisterGrid";
 import { RangeAddDialog } from "../components/RangeAddDialog";
 import { AdvancedDialog } from "../components/AdvancedDialog";
-import { KIND_LABELS, KIND_ORDER, WORD_ORDERS } from "../types";
-import type { KindSlug, Mode, PointDict, WordOrder } from "../types";
+import { FRAME_FAULTS, KIND_LABELS, KIND_ORDER, WORD_ORDERS } from "../types";
+import type { FrameFault, KindSlug, Mode, PointDict, WordOrder } from "../types";
 
 export function SlaveTab({ mode }: { mode: Mode }) {
   const ms = useStore((s) => s[mode]);
@@ -69,14 +69,15 @@ export function SlaveTab({ mode }: { mode: Mode }) {
     }
   };
 
-  const setWordOrder = async (word_order: WordOrder) => {
+  const patchSel = async (patch: Parameters<typeof api.patchSlave>[2]) => {
     try {
-      await api.patchSlave(mode, selId, { word_order });
+      await api.patchSlave(mode, selId, patch);
       await refreshMode(mode);
     } catch (e) {
       setError(String((e as Error).message ?? e));
     }
   };
+  const setWordOrder = (word_order: WordOrder) => patchSel({ word_order });
 
   const runImport = async () => {
     try {
@@ -97,6 +98,8 @@ export function SlaveTab({ mode }: { mode: Mode }) {
   const selSlave = ms.slaves.find((s) => s.id === selId);
   const selTag = selSlave?.tag ?? "";
   const selWordOrder: WordOrder = selSlave?.word_order ?? "ABCD";
+  const selFrameFault: FrameFault = selSlave?.frame_fault ?? "none";
+  const selFrameRate = selSlave?.frame_fault_rate ?? 1;
 
   return (
     <div className="slave-layout">
@@ -156,6 +159,34 @@ export function SlaveTab({ mode }: { mode: Mode }) {
             ))}
           </select>
         </label>
+        <label style={{ display: "block", marginTop: 8 }}>
+          <span className="muted">パケット異常注入</span>
+          <select
+            style={{ width: "100%", marginTop: 2 }}
+            value={selFrameFault}
+            onChange={(e) => patchSel({ frame_fault: e.target.value })}
+          >
+            {FRAME_FAULTS.map((f) => (
+              <option key={f.value} value={f.value}>
+                {f.label}
+              </option>
+            ))}
+          </select>
+        </label>
+        {selFrameFault !== "none" && (
+          <label style={{ display: "block", marginTop: 6 }}>
+            <span className="muted">発生率 {Math.round(selFrameRate * 100)}%</span>
+            <input
+              type="range"
+              min={0}
+              max={1}
+              step={0.05}
+              value={selFrameRate}
+              style={{ width: "100%" }}
+              onChange={(e) => patchSel({ frame_fault_rate: Number(e.target.value) })}
+            />
+          </label>
+        )}
       </div>
 
       <div className="card" style={{ margin: 0 }}>

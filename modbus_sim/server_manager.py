@@ -3,26 +3,35 @@
 from __future__ import annotations
 
 import asyncio
+import random
 from collections import deque
 from collections.abc import Callable
 from datetime import datetime
 
-from modbus_sim.config import CommMode, RtuConfig, TcpConfig
+from modbus_sim.config import CommMode, FrameFault, RtuConfig, TcpConfig
 from modbus_sim.datastore import SlaveRegistry
 from modbus_sim.logging_handler import LoggingModbusSerialServer, LoggingModbusTcpServer
-from modbus_sim.packet_log import detect_invalid_tcp_frame, format_trace_log_line
+from modbus_sim.packet_log import (
+    corrupt_frame,
+    detect_invalid_tcp_frame,
+    format_trace_log_line,
+)
 
 LOG_BUFFER_MAXLEN = 2000
 
 
-def _parse_slave_id(mode: CommMode, sending: bool, packet: bytes) -> int | None:
-    if sending:
-        return None
+def _frame_device_id(mode: CommMode, packet: bytes) -> int | None:
     if mode == CommMode.TCP and len(packet) >= 7:
         return packet[6]
     if mode == CommMode.RTU and len(packet) >= 1:
         return packet[0]
     return None
+
+
+def _parse_slave_id(mode: CommMode, sending: bool, packet: bytes) -> int | None:
+    if sending:
+        return None
+    return _frame_device_id(mode, packet)
 
 
 class ModbusServerManager:
@@ -116,6 +125,18 @@ class ModbusServerManager:
             slave_id = _parse_slave_id(mode, sending, packet)
             if slave_id is not None:
                 registry.touch_activity(slave_id)
+
+            # 応答フレーム（TX）にパケットレベル異常を注入する
+            if sending:
+                device_id = _frame_device_id(mode, packet)
+                if device_id is not None:
+                    fault, rate = registry.frame_fault_for(device_id)
+                    if fault != FrameFault.NONE and random.random() < rate:
+                        self._emit_log(
+                            f"[{timestamp}] {mode.value.upper()} FRAME-FAULT "
+                            f"{fault.value} device={device_id}"
+                        )
+                        return corrupt_frame(mode, packet, fault)
             return packet
 
         return _trace_packet

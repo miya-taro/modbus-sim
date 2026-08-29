@@ -1,8 +1,10 @@
-"""Modbus ADU のログ用サマリ生成。"""
+"""Modbus ADU のログ用サマリ生成とパケットレベル異常注入。"""
 
 from __future__ import annotations
 
-from modbus_sim.config import CommMode
+import random
+
+from modbus_sim.config import CommMode, FrameFault
 
 _FC_NAMES = {
     0x01: "ReadCoils",
@@ -150,6 +152,33 @@ def detect_invalid_tcp_frame(packet: bytes) -> str | None:
     if length < 1:
         return f"Invalid MBAP length: {length}"
     return None
+
+
+def corrupt_frame(mode: CommMode, packet: bytes, fault: FrameFault) -> bytes:
+    """応答フレームにパケットレベル異常を加えて返す。
+
+    - DROP:     空バイト列（マスタはタイムアウト）
+    - TRUNCATE: 末尾 1〜3 バイトを欠落
+    - BAD_CRC:  RTU は末尾 CRC バイトを反転、TCP は MBAP length を実長と食い違わせる
+    """
+    if fault == FrameFault.DROP:
+        return b""
+    if not packet:
+        return packet
+    if fault == FrameFault.TRUNCATE:
+        n = random.randint(1, 3)
+        if len(packet) - n < 1:
+            n = len(packet) - 1
+        return packet[: len(packet) - n] if n > 0 else packet
+    if fault == FrameFault.BAD_CRC:
+        if mode == CommMode.RTU:
+            return packet[:-1] + bytes([packet[-1] ^ 0xFF])
+        if len(packet) >= 6:
+            # 実長と異なる MBAP length を書き込む
+            bad = (len(packet) + 7) & 0xFFFF
+            return packet[:4] + bytes([bad >> 8, bad & 0xFF]) + packet[6:]
+        return packet[:-1] + bytes([packet[-1] ^ 0xFF])
+    return packet
 
 
 def format_trace_log_line(mode: CommMode, sending: bool, packet: bytes, *, timestamp: str) -> str:

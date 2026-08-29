@@ -70,7 +70,13 @@ export const api = {
   patchSlave: (
     mode: Mode,
     id: number,
-    patch: { tag?: string; selected?: boolean; word_order?: string },
+    patch: {
+      tag?: string;
+      selected?: boolean;
+      word_order?: string;
+      frame_fault?: string;
+      frame_fault_rate?: number;
+    },
   ) => req<ModeState>(`/api/slaves/${mode}/${id}`, { method: "PATCH", body: JSON.stringify(patch) }),
 
   listPoints: (mode: Mode, id: number, kind: KindSlug) =>

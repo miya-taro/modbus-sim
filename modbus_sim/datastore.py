@@ -20,6 +20,7 @@ from modbus_sim.config import (
     AutoMode,
     FaultException,
     FaultMode,
+    FrameFault,
     RegisterKind,
     ValueKind,
 )
@@ -114,6 +115,9 @@ class SlaveDatastore:
         self.points: dict[tuple[int, RegisterKind], RegisterPoint] = {}
         # 多レジスタ型（int32/float32/float64）のワイヤ上のワード/バイト順
         self.word_order: WordOrder = WordOrder.ABCD
+        # パケットレベル異常注入（全 FC の応答フレームが対象）
+        self.frame_fault: FrameFault = FrameFault.NONE
+        self.frame_fault_rate: float = 1.0
         self._coils = [False] * REGISTER_COUNT
         self._discrete_inputs = [False] * REGISTER_COUNT
         self._holding_registers = [0] * REGISTER_COUNT
@@ -412,6 +416,22 @@ class SlaveRegistry:
             raise KeyError(f"Slave ID {slave_id} not found")
         self._slaves[slave_id].set_word_order(order)
 
+    def frame_fault_for(self, slave_id: int) -> tuple[FrameFault, float]:
+        slave = self._slaves.get(slave_id)
+        if slave is None:
+            return FrameFault.NONE, 0.0
+        return slave.frame_fault, slave.frame_fault_rate
+
+    def set_frame_fault(
+        self, slave_id: int, fault: FrameFault, rate: float | None = None
+    ) -> None:
+        if slave_id not in self._slaves:
+            raise KeyError(f"Slave ID {slave_id} not found")
+        slave = self._slaves[slave_id]
+        slave.frame_fault = fault
+        if rate is not None:
+            slave.frame_fault_rate = max(0.0, min(1.0, rate))
+
     def touch_activity(self, slave_id: int) -> None:
         if slave_id in self._slaves:
             self._activity[slave_id] = time.monotonic()
@@ -496,14 +516,16 @@ class SlaveRegistry:
                     point_data["auto_step"] = point.auto_step
                     point_data["auto_period_sec"] = point.auto_period_sec
                 points.append(point_data)
-            slaves.append(
-                {
-                    "id": slave_id,
-                    "tag": self._tags.get(slave_id, ""),
-                    "word_order": slave.word_order.value,
-                    "points": points,
-                }
-            )
+            entry_out = {
+                "id": slave_id,
+                "tag": self._tags.get(slave_id, ""),
+                "word_order": slave.word_order.value,
+                "points": points,
+            }
+            if slave.frame_fault != FrameFault.NONE:
+                entry_out["frame_fault"] = slave.frame_fault.value
+                entry_out["frame_fault_rate"] = slave.frame_fault_rate
+            slaves.append(entry_out)
         return {"slaves": slaves, "selected_slave_id": self.selected_slave_id}
 
     def load_from_dict(self, data: dict) -> None:
@@ -527,6 +549,13 @@ class SlaveRegistry:
             try:
                 self._slaves[slave_id].word_order = WordOrder(entry.get("word_order", "ABCD"))
             except ValueError:
+                pass
+            try:
+                self._slaves[slave_id].frame_fault = FrameFault(entry.get("frame_fault", "none"))
+                self._slaves[slave_id].frame_fault_rate = float(
+                    entry.get("frame_fault_rate", 1.0)
+                )
+            except (ValueError, TypeError):
                 pass
             points = entry.get("points", [])
             if isinstance(points, list):

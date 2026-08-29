@@ -2,6 +2,14 @@ export type Mode = "tcp" | "rtu";
 export type KindSlug = "hr" | "ir" | "coil" | "di";
 export type Datatype = "uint16" | "int16" | "int32" | "float32" | "float64" | "bool";
 export type WordOrder = "ABCD" | "CDAB" | "BADC" | "DCBA";
+export type FrameFault = "none" | "bad_crc" | "truncate" | "drop";
+
+export const FRAME_FAULTS: { value: FrameFault; label: string }[] = [
+  { value: "none", label: "なし" },
+  { value: "bad_crc", label: "CRC/長さ破壊" },
+  { value: "truncate", label: "フレーム切断" },
+  { value: "drop", label: "無応答（フレーム破棄）" },
+];
 
 export const WORD_ORDERS: { value: WordOrder; label: string }[] = [
   { value: "ABCD", label: "ABCD (ビッグエンディアン)" },
@@ -37,6 +45,8 @@ export interface SlaveDict {
   id: number;
   tag: string;
   word_order: WordOrder;
+  frame_fault: FrameFault;
+  frame_fault_rate: number;
   activity: Activity;
 }
 
