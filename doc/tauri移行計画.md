@@ -465,6 +465,21 @@ Step 2〜3 の間は PySide 版と API 版が同じ `datastore` グローバル�
 frontend vitest 22、build OK。settings.json のキー増分: スレーブごとに
 `word_order` / `frame_fault` / `frame_fault_rate`、トップレベルに `identity`。
 
+### 2026-08-29（7回目）— マスター機能 / マスター統計 / シナリオ実行
+
+- **マスター（クライアント）タブ**（`modbus_sim/master.py`）: TCP/RTU で 1 接続、
+  FC 1-6/15/16、読み取りを datatype + ワード順でデコード、周期ポーリング。
+  通信失敗は `{ok:false}` として返す（例外を投げない）。`/api/master/*`。
+- **マスター統計**: 接続ごとに件数 / エラー / last-min-avg-max 応答時間 / req/s。
+  `describe()` に `stats`、ポーリング結果 WS に同梱。
+- **シナリオ実行**（`modbus_sim/scenario.py`）: JSON のステップ列（`set_point` /
+  `set_word_order` / `set_frame_fault` / `start_server` / `stop_server` /
+  `master_connect` / `master_request`＋`expect` / `wait` / `log`）を順に実行。
+  `POST /api/scenario/run`、ヘッドレス `python main.py --scenario f.json`（成功=exit0）、
+  「シナリオ」タブ。`examples/scenario_example.json`。→ CI 回帰ハーネス化。
+- テスト: backend 224 passed（test_master 10 / test_scenario 8 追加）、vitest 22。
+  タブは6つ（通信設定 / TCP / RTU / マスター / シナリオ / 通信ログ）。
+
 ### 2026-08-29（5回目）— CI ビルド成功 + 不具合修正
 
 - CI（`v0.1.1`）でインストーラ生成成功。`release/bundle/nsis/Modbus Simulator_0.1.0_x64-setup.exe`。

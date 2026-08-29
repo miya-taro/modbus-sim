@@ -14,9 +14,12 @@ Tauri シェルがサイドカーとして起動する場合はブラウザを�
 from __future__ import annotations
 
 import argparse
+import asyncio
+import contextlib
 import json
 import socket
 import sys
+import tempfile
 import threading
 import time
 import webbrowser
@@ -78,7 +81,15 @@ def main(argv: list[str] | None = None) -> int:
         action="store_true",
         help="待受開始後、既定のブラウザで UI を開く（単体で動作確認する用）",
     )
+    parser.add_argument(
+        "--scenario",
+        metavar="PATH",
+        help="シナリオ JSON をヘッドレス実行して結果を出力し終了する（サーバは起動しない）",
+    )
     args = parser.parse_args(argv)
+
+    if args.scenario:
+        return _run_scenario_cli(Path(args.scenario))
 
     port = _pick_port(args.host, args.port)
     browser_host = "127.0.0.1" if args.host in ("0.0.0.0", "::", "") else args.host
@@ -97,6 +108,36 @@ def main(argv: list[str] | None = None) -> int:
         log_level=args.log_level,
     )
     return 0
+
+
+def _run_scenario_cli(path: Path) -> int:
+    import logging
+
+    from modbus_sim.api.state import AppState
+    from modbus_sim.scenario import run_scenario
+
+    # 通信失敗時の pymodbus のフレームダンプ（stderr）を抑制
+    logging.getLogger("pymodbus").setLevel(logging.CRITICAL)
+    with contextlib.suppress(Exception):
+        sys.stdout.reconfigure(encoding="utf-8")
+
+    scenario = json.loads(path.read_text(encoding="utf-8"))
+
+    async def _go() -> dict:
+        state = AppState(Path(tempfile.mkdtemp()) / "settings.json")
+        try:
+            return await run_scenario(state, scenario)
+        finally:
+            with contextlib.suppress(Exception):
+                await state.stop_poll()
+            with contextlib.suppress(Exception):
+                await state.master.disconnect()
+            with contextlib.suppress(Exception):
+                await state.manager.stop_all()
+
+    result = asyncio.run(_go())
+    print(json.dumps(result, ensure_ascii=False, indent=2))
+    return 0 if result["ok"] else 1
 
 
 if __name__ == "__main__":

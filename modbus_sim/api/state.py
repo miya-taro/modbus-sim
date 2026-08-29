@@ -194,7 +194,14 @@ class AppState:
             except Exception as exc:  # noqa: BLE001
                 result = {"ok": False, "error": str(exc), "raw": [], "values": []}
             if self._broadcast is not None:
-                await self._broadcast({"type": "master_result", "result": result, "poll": True})
+                await self._broadcast(
+                    {
+                        "type": "master_result",
+                        "result": result,
+                        "master": self.master_snapshot(),
+                        "poll": True,
+                    }
+                )
             await asyncio.sleep(interval)
 
     def _mark_dirty(self, key: str) -> None:

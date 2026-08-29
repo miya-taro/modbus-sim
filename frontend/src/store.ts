@@ -19,6 +19,7 @@ const DEFAULT_MASTER: MasterState = {
   target: "",
   polling: false,
   poll: null,
+  stats: { count: 0, errors: 0, last_ms: null, min_ms: null, max_ms: null, avg_ms: null, elapsed_s: 0 },
 };
 
 const DEFAULT_IDENTITY: DeviceIdentity = {
@@ -31,7 +32,7 @@ const DEFAULT_IDENTITY: DeviceIdentity = {
   user_application_name: "",
 };
 
-export type TabKey = "settings" | "tcp" | "rtu" | "master" | "log";
+export type TabKey = "settings" | "tcp" | "rtu" | "master" | "scenario" | "log";
 
 interface State {
   connected: boolean;
@@ -154,7 +155,7 @@ export const useStore = create<State>((set, get) => ({
         return;
       }
       if (msg.type === "master_result") {
-        set({ masterResult: msg.result });
+        set({ masterResult: msg.result, ...(msg.master ? { master: msg.master } : {}) });
         return;
       }
       const patch: Partial<State> = {};

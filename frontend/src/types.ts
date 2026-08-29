@@ -94,12 +94,23 @@ export const IDENTITY_FIELDS: { key: keyof DeviceIdentity; label: string }[] = [
   { key: "user_application_name", label: "UserApplicationName" },
 ];
 
+export interface MasterStats {
+  count: number;
+  errors: number;
+  last_ms: number | null;
+  min_ms: number | null;
+  max_ms: number | null;
+  avg_ms: number | null;
+  elapsed_s: number;
+}
+
 export interface MasterState {
   connected: boolean;
   mode: Mode | null;
   target: string;
   polling: boolean;
   poll: Record<string, unknown> | null;
+  stats: MasterStats;
 }
 
 export interface MasterResult {
@@ -147,7 +158,23 @@ export interface TickMessage {
 export interface MasterResultMessage {
   type: "master_result";
   result: MasterResult;
+  master?: MasterState;
   poll: boolean;
+}
+
+export interface ScenarioStepResult {
+  index: number;
+  type: string;
+  ok: boolean;
+  detail: string;
+  elapsed_ms: number;
+}
+
+export interface ScenarioResult {
+  name: string;
+  ok: boolean;
+  steps: ScenarioStepResult[];
+  summary: { total: number; passed: number; failed: number };
 }
 
 export const KIND_LABELS: Record<KindSlug, string> = {

@@ -7,6 +7,7 @@
 from __future__ import annotations
 
 import asyncio
+import time
 from collections.abc import Callable
 from datetime import datetime
 
@@ -29,6 +30,18 @@ _WRITE_FNS = {
 }
 
 
+def _new_stats() -> dict:
+    return {
+        "count": 0,
+        "errors": 0,
+        "last_ms": None,
+        "min_ms": None,
+        "max_ms": None,
+        "_total_ms": 0.0,
+        "started_at": None,
+    }
+
+
 class ModbusMaster:
     def __init__(self, on_log: Callable[[str], None] | None = None) -> None:
         self._client = None
@@ -36,6 +49,35 @@ class ModbusMaster:
         self._target = ""
         self._on_log = on_log
         self._lock = asyncio.Lock()
+        self._stats = _new_stats()
+
+    def stats(self) -> dict:
+        s = self._stats
+        count = s["count"]
+        started = s["started_at"]
+        return {
+            "count": count,
+            "errors": s["errors"],
+            "last_ms": round(s["last_ms"], 2) if s["last_ms"] is not None else None,
+            "min_ms": round(s["min_ms"], 2) if s["min_ms"] is not None else None,
+            "max_ms": round(s["max_ms"], 2) if s["max_ms"] is not None else None,
+            "avg_ms": round(s["_total_ms"] / count, 2) if count else None,
+            "elapsed_s": round(time.monotonic() - started, 1) if started else 0.0,
+        }
+
+    def reset_stats(self) -> None:
+        self._stats = _new_stats()
+        self._stats["started_at"] = time.monotonic()
+
+    def _record(self, ms: float, *, ok: bool) -> None:
+        s = self._stats
+        s["count"] += 1
+        if not ok:
+            s["errors"] += 1
+        s["last_ms"] = ms
+        s["_total_ms"] += ms
+        s["min_ms"] = ms if s["min_ms"] is None else min(s["min_ms"], ms)
+        s["max_ms"] = ms if s["max_ms"] is None else max(s["max_ms"], ms)
 
     # --- lifecycle ---------------------------------------------------
     @property
@@ -47,6 +89,7 @@ class ModbusMaster:
             "connected": self.connected,
             "mode": self._mode.value if self._mode else None,
             "target": self._target,
+            "stats": self.stats(),
         }
 
     def _log(self, msg: str) -> None:
@@ -58,12 +101,13 @@ class ModbusMaster:
         from pymodbus.client import AsyncModbusTcpClient
 
         await self.disconnect()
-        client = AsyncModbusTcpClient(config.host, port=config.port, timeout=3)
+        client = AsyncModbusTcpClient(config.host, port=config.port, timeout=2, retries=1)
         if not await client.connect():
             raise ConnectionError(f"接続できませんでした: {config.host}:{config.port}")
         self._client = client
         self._mode = CommMode.TCP
         self._target = f"{config.host}:{config.port}"
+        self.reset_stats()
         self._log(f"connected {self._target}")
 
     async def connect_rtu(self, config: RtuConfig) -> None:
@@ -76,13 +120,15 @@ class ModbusMaster:
             bytesize=config.bytesize,
             parity=config.parity.to_pyserial(),
             stopbits=config.stopbits,
-            timeout=3,
+            timeout=2,
+            retries=1,
         )
         if not await client.connect():
             raise ConnectionError(f"シリアルポートを開けませんでした: {config.port}")
         self._client = client
         self._mode = CommMode.RTU
         self._target = config.summary()
+        self.reset_stats()
         self._log(f"connected {self._target}")
 
     async def disconnect(self) -> None:
@@ -113,12 +159,27 @@ class ModbusMaster:
         if not 0 <= address <= 0xFFFF:
             raise ValueError("Addr は 0-65535 です")
 
+        from pymodbus.exceptions import ModbusException
+
         async with self._lock:
-            if function in _READ_FNS:
-                return await self._do_read(function, device_id, address, count, datatype, word_order)
-            if function in _WRITE_FNS:
-                return await self._do_write(function, device_id, address, datatype, word_order, values or [])
-            raise ValueError(f"未知の function: {function}")
+            t0 = time.perf_counter()
+            try:
+                if function in _READ_FNS:
+                    result = await self._do_read(function, device_id, address, count, datatype, word_order)
+                elif function in _WRITE_FNS:
+                    result = await self._do_write(function, device_id, address, datatype, word_order, values or [])
+                else:
+                    raise ValueError(f"未知の function: {function}")
+            except (ModbusException, asyncio.TimeoutError, ConnectionResetError, OSError) as exc:
+                # 通信レベルの失敗は結果として返す（呼び出し側で例外にしない）
+                self._record((time.perf_counter() - t0) * 1000, ok=False)
+                self._log(f"error {function}: {exc}")
+                return {"ok": False, "error": str(exc), "exception_code": None, "raw": [], "values": []}
+            except Exception:
+                self._record((time.perf_counter() - t0) * 1000, ok=False)
+                raise
+            self._record((time.perf_counter() - t0) * 1000, ok=bool(result.get("ok")))
+            return result
 
     async def _do_read(self, function, device_id, address, count, datatype, word_order) -> dict:
         _fc, is_bit = _READ_FNS[function]

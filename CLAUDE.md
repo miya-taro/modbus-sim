@@ -4,7 +4,9 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## What this is
 
-A desktop app that simulates **Modbus TCP and RTU slaves simultaneously**, for developing/testing Modbus masters. TCP and RTU slave data are fully isolated even when Slave IDs collide. It can also act as a **Modbus master/client** (`modbus_sim/master.py`, "マスター" tab): one connection at a time, FC 1–6/15/16, reads decoded per datatype + word order, optional repeating poll. `/api/master/*` routes; `ModbusMaster` runs on the same asyncio loop.
+A desktop app that simulates **Modbus TCP and RTU slaves simultaneously**, for developing/testing Modbus masters. TCP and RTU slave data are fully isolated even when Slave IDs collide. It can also act as a **Modbus master/client** (`modbus_sim/master.py`, "マスター" tab): one connection at a time, FC 1–6/15/16, reads decoded per datatype + word order, optional repeating poll, per-connection latency/error stats. `/api/master/*` routes; `ModbusMaster` runs on the same asyncio loop; communication failures come back as `{ok: false, error}` rather than raising.
+
+**Scenario runner** (`modbus_sim/scenario.py`, "シナリオ" tab, `POST /api/scenario/run`, or headless `python main.py --scenario file.json` → exit 0/1): a JSON list of steps (`set_point` / `set_word_order` / `set_frame_fault` / `start_server` / `stop_server` / `master_connect` / `master_request` with `expect` asserts / `wait` / `log`) run in order on an `AppState`. Example in `examples/scenario_example.json`. Turns the sim into a CI regression harness.
 
 **UI migration in progress (see `doc/tauri移行計画.md`).** The PySide6 GUI has been removed. The app is now:
 

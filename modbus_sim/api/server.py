@@ -585,9 +585,11 @@ def create_app(settings_path: Path | None = None) -> FastAPI:
     @app.post("/api/master/request")
     async def master_request(body: MasterRequestBody) -> dict:
         try:
-            return await state.master.request(**_request_kwargs(body))
+            result = await state.master.request(**_request_kwargs(body))
         except (ValueError, ConnectionError) as exc:
             raise HTTPException(400, str(exc)) from exc
+        state._mark_dirty("master_state")
+        return result
 
     @app.post("/api/master/poll")
     async def master_poll(body: MasterRequestBody) -> dict:
@@ -603,6 +605,19 @@ def create_app(settings_path: Path | None = None) -> FastAPI:
         await state.stop_poll()
         state._mark_dirty("master_state")
         return state.master_snapshot()
+
+    # --- scenario ---------------------------------------------
+    @app.post("/api/scenario/run")
+    async def scenario_run(body: dict = Body(...)) -> dict:
+        from modbus_sim.scenario import run_scenario
+
+        try:
+            result = await run_scenario(state, body)
+        except Exception as exc:  # noqa: BLE001
+            raise HTTPException(400, str(exc)) from exc
+        state._mark_dirty("master_state")
+        await hub.broadcast(state.full_state())
+        return result
 
     # --- websocket -------------------------------------------
     @app.websocket("/ws")

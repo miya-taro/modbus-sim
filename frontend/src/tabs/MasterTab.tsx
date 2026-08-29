@@ -153,6 +153,16 @@ export function MasterTab() {
           状態: {master.connected ? `接続中 (${master.target})` : "未接続"}
           {master.polling && " ・ ポーリング中"}
         </p>
+        {master.stats.count > 0 && (
+          <div className="hint" style={{ lineHeight: 1.6 }}>
+            件数 {master.stats.count} / エラー {master.stats.errors}
+            {master.stats.elapsed_s > 0 &&
+              ` / ${(master.stats.count / master.stats.elapsed_s).toFixed(1)} req/s`}
+            <br />
+            応答 last {master.stats.last_ms ?? "-"} / min {master.stats.min_ms ?? "-"} / avg{" "}
+            {master.stats.avg_ms ?? "-"} / max {master.stats.max_ms ?? "-"} ms
+          </div>
+        )}
       </div>
 
       <div className="card" style={{ margin: 0 }}>

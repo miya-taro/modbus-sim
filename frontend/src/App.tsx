@@ -4,6 +4,7 @@ import { Modal } from "./components/Modal";
 import { SettingsTab } from "./tabs/SettingsTab";
 import { SlaveTab } from "./tabs/SlaveTab";
 import { MasterTab } from "./tabs/MasterTab";
+import { ScenarioTab } from "./tabs/ScenarioTab";
 import { LogTab } from "./tabs/LogTab";
 import { useStore, type TabKey } from "./store";
 
@@ -12,6 +13,7 @@ const TABS: { key: TabKey; label: string }[] = [
   { key: "tcp", label: "TCP スレーブ" },
   { key: "rtu", label: "RTU スレーブ" },
   { key: "master", label: "マスター" },
+  { key: "scenario", label: "シナリオ" },
   { key: "log", label: "通信ログ" },
 ];
 
@@ -48,6 +50,7 @@ export default function App() {
         {activeTab === "tcp" && <SlaveTab mode="tcp" />}
         {activeTab === "rtu" && <SlaveTab mode="rtu" />}
         {activeTab === "master" && <MasterTab />}
+        {activeTab === "scenario" && <ScenarioTab />}
         {activeTab === "log" && <LogTab />}
       </div>
       {confirmState && (

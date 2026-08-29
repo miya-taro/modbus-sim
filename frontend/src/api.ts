@@ -11,6 +11,7 @@ import type {
   Mode,
   ModeState,
   PointDict,
+  ScenarioResult,
   ServerState,
 } from "./types";
 
@@ -137,6 +138,9 @@ export const api = {
   masterRequest: (body: MasterRequestArgs) => req<MasterResult>("/api/master/request", jsonBody(body)),
   masterPoll: (body: MasterRequestArgs) => req<MasterState>("/api/master/poll", jsonBody(body)),
   masterPollStop: () => req<MasterState>("/api/master/poll/stop", { method: "POST" }),
+
+  runScenario: (scenario: unknown) =>
+    req<ScenarioResult>("/api/scenario/run", jsonBody(scenario as object)),
 
   exportSettings: (path: string) => req<{ ok: boolean }>("/api/settings/export", jsonBody({ path })),
   importSettings: (path: string) => req<{ ok: boolean }>("/api/settings/import", jsonBody({ path })),

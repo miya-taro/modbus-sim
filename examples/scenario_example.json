@@ -1,0 +1,32 @@
+{
+  "name": "float32 CDAB 読み取り + フレーム破棄の確認",
+  "reset": true,
+  "stop_on_failure": false,
+  "steps": [
+    { "type": "set_point", "mode": "tcp", "slave_id": 1, "kind": "hr",
+      "address": 0, "datatype": "float32", "raw": 3.5 },
+    { "type": "set_word_order", "mode": "tcp", "slave_id": 1, "order": "CDAB" },
+    { "type": "start_server", "mode": "tcp", "host": "127.0.0.1", "port": 15599 },
+    { "type": "master_connect", "mode": "tcp", "host": "127.0.0.1", "port": 15599 },
+
+    { "type": "log", "message": "正常読み取り: CDAB で 3.5 が返る" },
+    { "type": "master_request", "function": "read_holding_registers",
+      "address": 0, "count": 1, "datatype": "float32", "word_order": "CDAB",
+      "expect": { "ok": true, "values": [3.5] } },
+
+    { "type": "log", "message": "フレーム破棄を有効化 → マスターはタイムアウト" },
+    { "type": "set_frame_fault", "mode": "tcp", "slave_id": 1, "fault": "drop", "rate": 1.0 },
+    { "type": "master_request", "function": "read_holding_registers",
+      "address": 0, "count": 1, "datatype": "float32", "word_order": "CDAB",
+      "expect": { "ok": false } },
+
+    { "type": "log", "message": "フレーム破棄を解除 → 再び正常" },
+    { "type": "set_frame_fault", "mode": "tcp", "slave_id": 1, "fault": "none" },
+    { "type": "master_request", "function": "read_holding_registers",
+      "address": 0, "count": 1, "datatype": "float32", "word_order": "CDAB",
+      "expect": { "ok": true, "values": [3.5] } },
+
+    { "type": "master_disconnect" },
+    { "type": "stop_server", "mode": "tcp" }
+  ]
+}
