@@ -29,6 +29,10 @@ export function MasterTab() {
 
   const isWrite = useMemo(() => MASTER_FUNCTIONS.find((f) => f.value === fn)?.write ?? false, [fn]);
   const isBitFn = fn.includes("coil") || fn.includes("discrete");
+  // Write Single Register は 1 レジスタ型のみ（バックエンドも拒否する）
+  const dtChoices: Datatype[] =
+    fn === "write_register" ? ["uint16", "int16"] : REG_DATATYPES;
+  const effDatatype: Datatype = dtChoices.includes(datatype) ? datatype : dtChoices[0];
 
   const connect = async () => {
     try {
@@ -62,7 +66,7 @@ export function MasterTab() {
       device_id: Number(deviceId),
       address: Number(address),
       count: Number(count),
-      datatype,
+      datatype: effDatatype,
       word_order: wordOrder,
       values,
       interval_ms: Number(interval),
@@ -195,8 +199,8 @@ export function MasterTab() {
           <>
             <div className="form-row">
               <label>Datatype</label>
-              <select value={datatype} onChange={(e) => setDatatype(e.target.value as Datatype)}>
-                {REG_DATATYPES.map((d) => (
+              <select value={effDatatype} onChange={(e) => setDatatype(e.target.value as Datatype)}>
+                {dtChoices.map((d) => (
                   <option key={d}>{d}</option>
                 ))}
               </select>

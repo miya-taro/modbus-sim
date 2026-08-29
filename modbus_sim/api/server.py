@@ -10,8 +10,6 @@ from dataclasses import replace
 from pathlib import Path
 from typing import Any
 
-log = logging.getLogger(__name__)
-
 from fastapi import Body, FastAPI, HTTPException, Query, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
@@ -48,6 +46,8 @@ from modbus_sim.settings_model import (
 )
 from modbus_sim.settings_store import SettingsStore
 from modbus_sim.wordorder import WordOrder
+
+log = logging.getLogger(__name__)
 
 
 # --- request models -------------------------------------------------------
@@ -572,14 +572,14 @@ def create_app(settings_path: Path | None = None) -> FastAPI:
             raise HTTPException(400, str(exc)) from exc
         except Exception as exc:  # noqa: BLE001
             raise HTTPException(400, friendly_server_error(exc)) from exc
-        state._mark_dirty("master_state")
+        state.mark_master_dirty()
         return state.master_snapshot()
 
     @app.post("/api/master/disconnect")
     async def master_disconnect() -> dict:
         await state.stop_poll()
         await state.master.disconnect()
-        state._mark_dirty("master_state")
+        state.mark_master_dirty()
         return state.master_snapshot()
 
     @app.post("/api/master/request")
@@ -588,7 +588,7 @@ def create_app(settings_path: Path | None = None) -> FastAPI:
             result = await state.master.request(**_request_kwargs(body))
         except (ValueError, ConnectionError) as exc:
             raise HTTPException(400, str(exc)) from exc
-        state._mark_dirty("master_state")
+        state.mark_master_dirty()
         return result
 
     @app.post("/api/master/poll")
@@ -597,13 +597,13 @@ def create_app(settings_path: Path | None = None) -> FastAPI:
         if not state.master.connected:
             raise HTTPException(400, "マスターが接続されていません")
         await state.start_poll(kwargs, body.interval_ms or 1000)
-        state._mark_dirty("master_state")
+        state.mark_master_dirty()
         return state.master_snapshot()
 
     @app.post("/api/master/poll/stop")
     async def master_poll_stop() -> dict:
         await state.stop_poll()
-        state._mark_dirty("master_state")
+        state.mark_master_dirty()
         return state.master_snapshot()
 
     # --- scenario ---------------------------------------------
@@ -615,7 +615,7 @@ def create_app(settings_path: Path | None = None) -> FastAPI:
             result = await run_scenario(state, body)
         except Exception as exc:  # noqa: BLE001
             raise HTTPException(400, str(exc)) from exc
-        state._mark_dirty("master_state")
+        state.mark_master_dirty()
         await hub.broadcast(state.full_state())
         return result
 

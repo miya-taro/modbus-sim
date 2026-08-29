@@ -130,7 +130,10 @@ async def _run_step(state, stype: str, step: dict) -> str | None:
         reg = state.registry(step.get("mode", "tcp"))
         slave = reg.get_slave(int(step.get("slave_id", 1)))
         kind = _KIND_BY_SLUG[step["kind"]]
-        datatype = ValueKind(step.get("datatype", "uint16"))
+        if kind in (RegisterKind.COIL, RegisterKind.DISCRETE_INPUT):
+            datatype = ValueKind.BOOL
+        else:
+            datatype = ValueKind(step.get("datatype", "uint16"))
         raw = step.get("raw", step.get("value", 0))
         raw = float(raw) if datatype.is_float else int(raw)
         slave.upsert_point(RegisterPoint(address=int(step["address"]), kind=kind, datatype=datatype, raw=raw, tag=step.get("tag", "")))

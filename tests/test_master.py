@@ -88,6 +88,33 @@ async def test_master_request_without_connection_raises() -> None:
         await master.request(function="read_coils", device_id=1, address=0, count=1)
 
 
+@pytest.mark.asyncio
+async def test_write_single_register_rejects_multi_register_type() -> None:
+    reg = SlaveRegistry()
+    reg.get_slave(1).upsert_point(
+        RegisterPoint(address=0, kind=RegisterKind.HOLDING_REGISTER, datatype=ValueKind.INT32, raw=0)
+    )
+    mgr = ModbusServerManager(slave_registry=reg)
+    port = next(_PORTS)
+    await mgr.start_tcp(TcpConfig(host="127.0.0.1", port=port))
+    m = ModbusMaster()
+    try:
+        await m.connect_tcp(TcpConfig(host="127.0.0.1", port=port))
+        with pytest.raises(ValueError, match="1 レジスタ型"):
+            await m.request(
+                function="write_register", device_id=1, address=0,
+                datatype=ValueKind.INT32, values=[123456],
+            )
+        with pytest.raises(ValueError, match="値を1つ"):
+            await m.request(
+                function="write_register", device_id=1, address=0,
+                datatype=ValueKind.UINT16, values=[1, 2],
+            )
+    finally:
+        await m.disconnect()
+        await mgr.stop_tcp()
+
+
 class TestMasterApi:
     @pytest.fixture
     def client(self, tmp_path):

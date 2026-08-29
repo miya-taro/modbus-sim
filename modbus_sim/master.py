@@ -204,6 +204,8 @@ class ModbusMaster:
         _fc, is_bit, multi = _WRITE_FNS[function]
         if not values:
             raise ValueError("書き込む値がありません")
+        if not multi and len(values) != 1:
+            raise ValueError("単一書き込みには値を1つだけ指定してください")
         if is_bit:
             bit_vals = [bool(v) for v in values]
             if multi:
@@ -211,6 +213,11 @@ class ModbusMaster:
             else:
                 wr = await self._client.write_coil(address, bit_vals[0], device_id=device_id)
         else:
+            if not multi and datatype.register_span > 1:
+                raise ValueError(
+                    f"Write Single Register は 1 レジスタ型のみ（{datatype.value} は "
+                    "Write Multiple Registers を使ってください）"
+                )
             regs: list[int] = []
             for v in values:
                 validate_address(address + len(regs), datatype)

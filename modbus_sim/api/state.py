@@ -207,6 +207,10 @@ class AppState:
     def _mark_dirty(self, key: str) -> None:
         self._dirty.add(key)
 
+    def mark_master_dirty(self) -> None:
+        """次の tick でマスター状態（統計含む）を配信する。"""
+        self._dirty.add("master_state")
+
     def take_dirty(self) -> set[str]:
         dirty, self._dirty = self._dirty, set()
         return dirty
