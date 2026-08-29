@@ -442,6 +442,29 @@ Step 2〜3 の間は PySide 版と API 版が同じ `datastore` グローバル�
 
 暫定対応: エクスポート/インポートのファイル指定はパス直接入力（将来 Tauri のダイアログに置換）。
 
+### 2026-08-29（6回目）— レビュー修正 + シミュレータ強化 4 点
+
+レビュー指摘の修正:
+- グリッドが poller tick ごとに行を再マウントし編集内容が消える問題 →
+  key を addr で安定化、フォーカス中は上書きしない EditableCell に。
+- 通信設定タブも同種の上書き → 初回のみ hydrate + デバウンス保存。
+- int 型に非整数 JSON 数値を渡すと黙って切り捨て → 400。
+- poller が AppState の非公開属性を直接操作 → build_tick / clear_log へ集約。
+  tick の *_points は選択中スレーブ分のみ送信。
+
+機能強化（`doc/評価` の 1〜4）:
+1. **ワード/バイト順**（ABCD/CDAB/BADC/DCBA）をスレーブ単位で。int32/float32/
+   float64 の encode/decode/Decoded/入力に反映。`modbus_sim/wordorder.py`。
+2. **グリッド仮想化**（`@tanstack/react-virtual`）。2000 点でも DOM 行 ~30。
+3. **FC 43（機器識別）**: `DeviceIdentity` を identity としてサーバへ。
+   **FC 8（診断）** は pymodbus 標準応答。`GET/PUT /api/identity`。
+4. **パケットレベル異常注入**（CRC/長さ破壊・フレーム切断・破棄）をスレーブ単位・
+   発生率付きで。`packet_log.corrupt_frame` + `server_manager` の TX フック。
+
+テスト: backend 207 passed（wordorder 20 / identity 10 / frame_fault 15 追加）、
+frontend vitest 22、build OK。settings.json のキー増分: スレーブごとに
+`word_order` / `frame_fault` / `frame_fault_rate`、トップレベルに `identity`。
+
 ### 2026-08-29（5回目）— CI ビルド成功 + 不具合修正
 
 - CI（`v0.1.1`）でインストーラ生成成功。`release/bundle/nsis/Modbus Simulator_0.1.0_x64-setup.exe`。

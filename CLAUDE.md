@@ -88,7 +88,9 @@ SlaveRegistry            per comm mode; holds slaves, tags, activity timestamps,
   - copies register/coil state between datastore memory and the server's block arrays,
   - mirrors client writes back into `RegisterPoint.raw`.
 - Coils / discrete inputs are stored as full `bool` arrays and packed into 16-bit registers via `SimUtils.bitsToRegisters`, with block-start offset handling in `_sync_bits_to_registers`.
-- Multi-register datatypes are big-endian: `INT32` / `FLOAT32` span 2 registers, `FLOAT64` spans 4. `ValueKind.register_span` / `ValueKind.is_float` drive the generic paths (`_write_register_point_to_block`, `raw_from_memory(words=...)`, `_memory_words`, `validate_address`). Address must be ≤ `REGISTER_COUNT - span`. Fault and auto-change features apply to **Holding/Input Registers only**.
+- Multi-register datatypes: `INT32` / `FLOAT32` span 2 registers, `FLOAT64` spans 4. Word/byte order is **per-slave** (`SlaveDatastore.word_order`, `WordOrder` enum `ABCD`/`CDAB`/`BADC`/`DCBA` in `modbus_sim/wordorder.py`; `ABCD` = big-endian = the legacy behavior). `_write_raw` / `raw_from_memory(word_order=)` / `format_decoded_display` / `parse_decoded_input` all take it; `set_word_order` rewrites existing multi-register points. `ValueKind.register_span` / `is_float` drive the generic paths. Address must be ≤ `REGISTER_COUNT - span`. `validate_datatype_value` rejects out-of-range ints/floats before `struct.pack` can raise. Fault and auto-change features apply to **Holding/Input Registers only**.
+- Per-slave fault knobs beyond per-register: `frame_fault` / `frame_fault_rate` (`FrameFault` enum `none`/`bad_crc`/`truncate`/`drop`) — `server_manager`'s TX `trace_packet` hook calls `packet_log.corrupt_frame()` with probability `rate` on outgoing frames for that device id.
+- Device identification (FC 43) is server-wide: `modbus_sim/identity.py::DeviceIdentity` → `ModbusDeviceIdentification` passed to `start_tcp` / `start_rtu`. FC 8 (Diagnostics) is handled by pymodbus with no extra config.
 - `raw` (decimal, in memory) vs "decoded" (hex display); `parse_decoded_input` accepts `0x1234`, `1234h`, or bare `1234` — all hex. Floats: the decoded hex is the IEEE-754 bit pattern (8 / 16 hex digits).
 
 ### Server lifecycle (`server_manager.py`, `logging_handler.py`)
@@ -103,6 +105,10 @@ SlaveRegistry            per comm mode; holds slaves, tags, activity timestamps,
 - `settings_store.py` — thin JSON read/write only (`load()`, `write_payload()`). Persisted to `~/.modbus_sim/settings.json` (`%USERPROFILE%\.modbus_sim\settings.json` on Windows). Keys: `tcp`, `rtu`, `tcp_slaves`, `rtu_slaves`, `tcp_selected_slave_id`, `rtu_selected_slave_id`. A legacy top-level `slaves` key is migrated into the TCP registry.
 - `settings_model.py` — Qt-free `CommSettings` ⇔ dict conversion (`comm_to_dict`, `apply_dict_to_comm`, defensively coded against corrupt values) plus `comm_to_tcp_config` / `comm_to_rtu_config` (validation that raises `ValueError` with a Japanese message).
 - `AppState.schedule_save()` debounces 500 ms and offloads the JSON write with `asyncio.to_thread`.
+
+### Frontend grid
+
+`frontend/src/components/RegisterGrid.tsx` virtualizes rows with `@tanstack/react-virtual` (fixed 30px rows, padding-`<tr>` pattern; `.grid-wrap` is the bounded scroll container). Cells are `EditableCell` — controlled, but only re-sync from the server value while **not focused**, so poller ticks don't clobber in-progress edits. `datatype.ts` mirrors `datastore.py` + `wordorder.py` (tested in `datatype.test.ts`).
 
 ### Register bulk ops (`registry_ops.py`)
 
@@ -121,7 +127,7 @@ Qt-free pure functions extracted from the old slave panel: `add_register_range`,
 
 ## Tests
 
-`tests/` covers datastore/datatypes, strict boundary checks (`test_strict.py` — also port-policy via `settings_model`), comm-log formatting, RTU over pymodbus `NULLMODEM_HOST`, live register updates after server start, delete ops (datastore level), bulk register ops (`registry_ops` unit tests), advanced fault/delay/auto settings (datastore + API), settings robustness (`settings_model` + `SettingsStore`), and the API layer (`test_api.py`, FastAPI `TestClient`). TCP tests allocate ports from `itertools.count` starting around 16000–19000.
+`tests/` covers datastore/datatypes, strict boundary checks (`test_strict.py` — also port-policy via `settings_model`), comm-log formatting, RTU over pymodbus `NULLMODEM_HOST`, live register updates after server start, delete ops (datastore level), bulk register ops (`registry_ops` unit tests), advanced fault/delay/auto settings (datastore + API), settings robustness (`settings_model` + `SettingsStore`), the API layer (`test_api.py`, FastAPI `TestClient`), word/byte order (`test_wordorder.py`), device identification / FC 8 (`test_identity.py`), and packet-level frame faults (`test_frame_fault.py`). TCP tests allocate ports from `itertools.count` starting around 16000–19100. ~207 pass.
 
 Known pre-existing failure (not caused by the migration): `test_server_manager_robustness.py::test_tcp_running_state_recovers_after_bind_failure` — Windows lets the second bind to a loopback port succeed, so the expected error isn't raised.
 
