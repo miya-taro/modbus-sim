@@ -1,13 +1,26 @@
 # Modbus TCP/RTU シミュレータ
 
-Modbus 通信の開発・テスト向けに、**TCP / RTU スレーブを同時に模擬**できるツールです。
+Modbus 通信の開発・テスト向けに、**TCP / RTU スレーブを同時に模擬**でき、**マスター（クライアント）**としても動作するツールです。異常応答・遅延・値の自動変化・パケット破壊の注入、機器識別（FC 43）、シナリオ実行に対応。
 
-> **⚠ UI 移行中**: PySide6 GUI は削除し、**Tauri（Rust シェル）+ React フロント + Python バックエンド（FastAPI）** へ移行中です。
-> - **1コマンドで起動**: `python main.py --open`（バックエンド起動＋ブラウザで UI を開く。初回のみ `cd frontend && npm install && npm run build` が必要）
-> - フロント開発（HMR）: 別端末で `cd frontend && npm run dev` → http://localhost:5173
-> - Tauri シェル（`src-tauri/`）は実装済みだが、ローカルは Smart App Control でビルド不可。CI（`.github/workflows/build-desktop.yml`）でインストーラ生成。詳細と進捗は [`doc/tauri移行計画.md`](doc/tauri移行計画.md) を参照。
->
-> 以下の GUI 前提の記述は移行完了まで暫定です。
+## インストール（Windows）
+
+[**Releases**](../../releases) から `Modbus Simulator_*_x64-setup.exe` をダウンロードして実行。
+
+- インストーラは**未署名**です。初回起動で SmartScreen の警告が出たら「詳細情報」→「実行」で進めてください。
+- **Smart App Control が有効**で起動できない環境では、下記「ソースから起動」を使ってください。
+
+## ソースから起動（Python）
+
+```bash
+pip install -r requirements.txt
+cd frontend && npm install && npm run build && cd ..
+python main.py --open        # バックエンド起動 + 既定ブラウザで UI を開く
+```
+
+- フロント開発（HMR）: 別端末で `cd frontend && npm run dev` → http://localhost:5173
+- Tauri シェル（`src-tauri/`）は Smart App Control 環境ではローカルビルド不可のため CI（`.github/workflows/build-desktop.yml`）でインストーラを生成。詳細は [`doc/tauri移行計画.md`](doc/tauri移行計画.md)。
+
+> 以下の GUI 前提の記述は一部旧 PySide6 版のもので、暫定です。
 
 ## 機能
 
