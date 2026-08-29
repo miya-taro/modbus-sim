@@ -111,3 +111,5 @@ noto-cjk-extract/
 
 # CI からダウンロードしたビルド成果物
 /release/
+/release_v020/
+/release*/
