@@ -1,7 +1,7 @@
 [project]
 name = "modbus-sim"
 version = "0.1.0"
-description = "Modbus TCP/RTU slave simulator with PySide6 UI"
+description = "Modbus TCP/RTU スレーブシミュレータ (Tauri + FastAPI)"
 readme = "README.md"
 requires-python = ">=3.10"
 dependencies = [
@@ -21,6 +21,9 @@ modbus-sim = "modbus_sim.__main__:main"
 [build-system]
 requires = ["setuptools>=61"]
 build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+include = ["modbus_sim*"]
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
