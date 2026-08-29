@@ -1,6 +1,6 @@
 [package]
 name = "modbus-sim"
-version = "0.1.0"
+version = "0.2.0"
 description = "Modbus TCP/RTU シミュレータ"
 authors = ["rtrdevelop"]
 edition = "2021"
